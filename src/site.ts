@@ -38,28 +38,30 @@ padding:0 3.5vw;height:74px;background:#100f0acc;backdrop-filter:blur(4px);borde
 @media(max-width:760px){.hd nav{display:none}}
 
 /* ticker */
-.tick{border-bottom:1px solid #f4ecca24;background:var(--ink2);overflow:hidden;white-space:nowrap}
-.tick span{display:inline-block;padding:9px 0;font:700 10.5px var(--lab);letter-spacing:.22em;text-transform:uppercase;
-animation:tickm 40s linear infinite}
+.tick{border-bottom:1px solid #f4ecca24;background:var(--ink2);overflow:hidden}
+.ticktrack{display:inline-flex;white-space:nowrap;animation:tickm var(--tickdur,45s) linear infinite;will-change:transform}
+.ticktrack>span{display:inline-block;padding:9px 0;font:700 10.5px var(--lab);letter-spacing:.22em;text-transform:uppercase}
 @keyframes tickm{to{transform:translateX(-50%)}}
 .tick b{color:var(--signal)} .tick i{font-style:normal;color:#f4ecca66;margin:0 18px}
 
 /* hero */
-.hero{position:relative;padding:9vh 5vw 7vh;isolation:isolate;overflow:hidden}
+.hero{position:relative;padding:9vh 5vw 7vh;isolation:isolate;overflow:hidden;
+display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:3vw;align-items:center}
+.hero>.copy{min-width:0}
 .hero::before{content:"NO EDGE NO EDGE NO EDGE";position:absolute;top:8%;left:-4vw;font:400 17vw/1 var(--disp);
 color:#e8b62e0d;white-space:nowrap;pointer-events:none;z-index:-1}
-h1{font:400 clamp(3.4rem,10.5vw,9rem)/.8 var(--disp);text-transform:uppercase;letter-spacing:-.01em}
+h1{font:400 clamp(3.2rem,8.6vw,7.6rem)/.84 var(--disp);text-transform:uppercase;letter-spacing:-.01em;margin-top:18px}
 h1 i{font-style:normal;color:transparent;-webkit-text-stroke:2px var(--cream);display:block}
 .deck{font:400 clamp(1.1rem,2vw,1.6rem)/1.35 var(--disp);letter-spacing:.03em;text-transform:uppercase;
 margin:26px 0 8px;max-width:640px}
 .deck em{font-style:normal;color:var(--signal)}
-.herofan{position:absolute;right:2vw;top:12vh;width:min(390px,34vw);height:420px;pointer-events:none;z-index:-1}
+.herofan{position:relative;width:100%;max-width:430px;height:430px;justify-self:end;pointer-events:none}
 .herofan img{position:absolute;width:64%;border:6px solid #1c1a10;box-shadow:14px 16px #0a0a08cc;background:#181712}
 .herofan img:nth-child(1){left:0;top:36px;transform:rotate(-9deg)}
 .herofan img:nth-child(2){left:24%;top:0;transform:rotate(3deg);z-index:2}
 .herofan img:nth-child(3){left:44%;top:56px;transform:rotate(12deg)}
-@media(max-width:900px){.herofan{display:none}}
-.stamp{position:absolute;right:5vw;bottom:5vh;width:138px;height:138px;border:1.5px solid var(--cream);border-radius:50%;
+@media(max-width:900px){.herofan{display:none}.hero{display:block}}
+.stamp{position:absolute;right:-8px;bottom:-6px;width:138px;height:138px;border:1.5px solid var(--cream);border-radius:50%;
 display:grid;place-content:center;text-align:center;animation:float 5s ease-in-out infinite;background:#100f0aa8;z-index:3}
 .stamp::before{content:"";position:absolute;inset:9px;border:1px dashed var(--cream);border-radius:50%}
 .stamp b{font:400 1.05rem var(--disp);text-transform:uppercase}
@@ -104,8 +106,8 @@ font:700 10px var(--lab);letter-spacing:.18em;text-transform:uppercase;box-shado
 
 /* how-it-works */
 .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px}
-.step{border:1px solid #f4ecca30;background:var(--ink2);padding:22px 20px;position:relative}
-.step b{position:absolute;top:-18px;right:14px;font:400 3.4rem var(--disp);color:#e8b62e2b}
+.step{border:1px solid #f4ecca30;background:var(--ink2);padding:34px 30px 30px;position:relative}
+.step b{position:absolute;top:16px;right:26px;font:400 3rem var(--disp);color:#e8b62e2e}
 .step h3{font:400 1.35rem var(--disp);text-transform:uppercase;margin-bottom:8px;color:var(--signal)}
 .step p{font-size:13px;opacity:.92}
 
@@ -170,7 +172,14 @@ function shell(title: string, body: string, ticker?: string): string {
   <nav><a href="/raffles">Raffles</a><a href="/vault">The Vault</a><a href="/grades">Receipts</a><a href="/feed">Live Feed</a></nav>
   <span class="papertag">● PAPER MODE</span>
 </header>
-${ticker ? `<div class="tick"><span>${ticker}${ticker}</span></div>` : ""}
+${ticker ? (() => {
+  // repeat short content so one copy always exceeds the viewport, then
+  // duplicate the whole copy once for the seamless -50% loop
+  let copy = ticker;
+  while (copy.length < 2600) copy += ticker;
+  const dur = Math.max(30, Math.round(copy.length / 28));
+  return `<div class="tick"><div class="ticktrack" style="--tickdur:${dur}s"><span>${copy}</span><span>${copy}</span></div></div>`;
+})() : ""}
 ${body}
 <footer>
   <div class="big">THE HOUSE HAS NO EDGE.<br>WE JUST BUY BETTER THAN YOU.</div>
@@ -217,14 +226,18 @@ export function mountSite(app: express.Express): void {
     ).filter(Boolean).map((s) => `${s}<i>◆</i>`).join("");
     res.type("html").send(shell("the machine", `
 <section class="hero">
-  <div class="herofan">${fan.map((v) => `<img src="${v.image}" alt="">`).join("")}</div>
-  <p class="lab" style="color:var(--acid)">A MACHINE BUILT BY RIKU · GRADED CARDS · PROVABLY FAIR</p>
-  <h1>EVERY TICKET<br><i>WORTH EXACTLY</i>WHAT IT COSTS.</h1>
-  <p class="deck">The machine snipes graded cards <em>below market</em>, then raffles them at
-  <em>exactly their value</em>. Its only profit is the discount it caught. Your odds are
-  committed on-chain <em>before tickets exist</em>.</p>
-  <a class="cta" href="/raffles"><small>${live.length} live raffle${live.length === 1 ? "" : "s"} right now</small><b>ENTER THE MACHINE</b><span>↗</span></a>
-  <div class="stamp"><b>PROVABLY<br>FAIR</b><span>VERIFY EVERY DRAW</span></div>
+  <div class="copy">
+    <p class="lab" style="color:var(--acid)">A MACHINE BUILT BY RIKU · GRADED CARDS · PROVABLY FAIR</p>
+    <h1>EVERY TICKET<br><i>WORTH EXACTLY</i>WHAT IT COSTS.</h1>
+    <p class="deck">The machine snipes graded cards <em>below market</em>, then raffles them at
+    <em>exactly their value</em>. Its only profit is the discount it caught. Your odds are
+    committed on-chain <em>before tickets exist</em>.</p>
+    <a class="cta" href="/raffles"><small>${live.length} live raffle${live.length === 1 ? "" : "s"} right now</small><b>ENTER THE MACHINE</b><span>↗</span></a>
+  </div>
+  <div class="herofan">
+    ${fan.map((v) => `<img src="${v.image}" alt="">`).join("")}
+    <div class="stamp"><b>PROVABLY<br>FAIR</b><span>VERIFY EVERY DRAW</span></div>
+  </div>
 </section>
 
 ${live.length ? `<section>
