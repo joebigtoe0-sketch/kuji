@@ -3,6 +3,9 @@ import { fetchPage, type Listing } from "./cc.js";
 import { ingest, compFor, indexStats } from "./comps.js";
 import { state, save, ledger } from "./store.js";
 import { log } from "./log.js";
+import { realBuy } from "./buyer.js";
+import { halted } from "./halt.js";
+import { usdcBalance } from "./wallet.js";
 
 /**
  * The sniper — scans newest listings, prices them against the comp index,
@@ -15,8 +18,11 @@ let scanning = false;
 
 export async function scan(): Promise<void> {
   if (scanning) return;
+  if (halted()) { log.warn("sniper", "halted — skipping sweep"); return; }
   scanning = true;
   try {
+    // live mode prices guardrails off the real bankroll, not the paper number
+    if (cfg.live) state.walletUsd = await usdcBalance();
     const all: Listing[] = [];
     for (let p = 1; p <= cfg.scanPages; p++) {
       try {
@@ -66,8 +72,18 @@ export async function scan(): Promise<void> {
         ledger("skip-broke", { nft: l.nft, item: l.itemName, price: l.priceUsd, wallet: +state.walletUsd.toFixed(2) });
         continue;
       }
-      // PAPER BUY
-      state.walletUsd -= l.priceUsd;
+      if (cfg.live && l.priceUsd > cfg.liveMaxCardUsd) {
+        ledger("skip-live-cap", { nft: l.nft, item: l.itemName, price: l.priceUsd, cap: cfg.liveMaxCardUsd });
+        continue;
+      }
+      // BUY — real tx in live mode, bookkeeping-only in paper mode
+      if (cfg.live) {
+        const r = await realBuy(l);
+        if (!r.ok) continue; // reason already in the ledger
+        state.walletUsd = await usdcBalance();
+      } else {
+        state.walletUsd -= l.priceUsd;
+      }
       state.seenPaper.push(l.nft);
       state.vault.push({
         nft: l.nft, itemName: l.itemName, category: l.category, grade: l.grade,
@@ -77,12 +93,12 @@ export async function scan(): Promise<void> {
       });
       buys++;
       boughtIdentities.add(idKey);
-      ledger("paper-buy", {
+      ledger(cfg.live ? "live-buy-vaulted" : "paper-buy", {
         nft: l.nft, item: l.itemName, category: l.category, grade: `${l.gradingCompany} ${l.grade}`,
         price: l.priceUsd, comp: comp.compUsd, edge: +edge.toFixed(3), basis: comp.basis,
         wallet: +state.walletUsd.toFixed(2),
       });
-      log.info("sniper", `PAPER BUY ${l.itemName.slice(0, 60)} @ $${l.priceUsd} (comp $${comp.compUsd}, edge ${(edge * 100).toFixed(0)}%)`);
+      log.info("sniper", `${cfg.live ? "LIVE" : "PAPER"} BUY ${l.itemName.slice(0, 60)} @ $${l.priceUsd} (comp $${comp.compUsd}, edge ${(edge * 100).toFixed(0)}%)`);
     }
     save();
     log.info("sniper", `sweep: ${all.length} listings, index ${st.groups} groups/${st.rows} rows, ${considered} priced, ${buys} paper buys, wallet $${state.walletUsd.toFixed(2)}`);

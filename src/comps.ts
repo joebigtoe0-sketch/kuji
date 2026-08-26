@@ -63,20 +63,35 @@ export interface Comp {
   groupSize: number;
 }
 
-/** Conservative value for a listing, or null if we can't honestly price it. */
+/**
+ * Conservative value for a listing, or null if we can't honestly price it.
+ *
+ * v1 hardening (the sweep-#1 lesson, where two moonshot asks manufactured a
+ * "72% edge" on sealed product):
+ *  - comps only from listings seen in the last 48h — a week-old ask that
+ *    nobody took is not evidence of value
+ *  - the comp is capped at the group MEDIAN: one realistic ask among
+ *    moonshots can no longer set the price
+ *  - a comp group whose second-lowest is more than 2.5x the floor is
+ *    declared unpriceable — that spread means the "market" here is noise
+ */
 export function compFor(l: Listing): Comp | null {
-  const rows = index[identityKey(l)] ?? [];
+  const fresh = Date.now() - 48 * 3600_000;
+  const rows = (index[identityKey(l)] ?? []).filter((r) => r.seenAt > fresh);
   if (rows.length < cfg.minComps) return null;
   const prices = rows.map((r) => r.priceUsd).sort((a, b) => a - b);
   // candidate should BE the floor — otherwise it's not a snipe
   if (l.priceUsd > prices[0] + 0.01) return null;
   const second = prices.find((p) => p > l.priceUsd + 0.01);
   if (!second) return null;
-  const compUsd = +(second * cfg.compHaircut).toFixed(2);
+  if (second > l.priceUsd * 2.5) return null; // gap too wide to mean anything
+  const median = prices[Math.floor(prices.length / 2)];
+  const anchor = Math.min(second, median);
+  const compUsd = +(anchor * cfg.compHaircut).toFixed(2);
   return {
     compUsd,
     groupSize: rows.length,
-    basis: `2nd-lowest of ${rows.length} live listings ($${second}) x ${cfg.compHaircut} haircut`,
+    basis: `min(2nd-lowest $${second}, median $${median}) of ${rows.length} fresh listings x ${cfg.compHaircut} haircut`,
   };
 }
 

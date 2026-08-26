@@ -41,6 +41,8 @@ export interface Raffle {
   fillDeadline: number; // fill-or-refund
   resolveSlot: number; // named FUTURE Solana slot in the commitment
   commitHash: string; // sha256(manifest | seed | resolveSlot) — published before sale
+  commitSig?: string; // live mode: memo tx anchoring the commit on-chain
+  revealSig?: string; // live mode: memo tx revealing the seed after the draw
   seed?: string; // revealed at resolution
   blockhash?: string; // the real chain blockhash used
   winner?: string;

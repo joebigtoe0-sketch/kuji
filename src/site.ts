@@ -1,4 +1,5 @@
 import type express from "express";
+import { cfg } from "./config.js";
 import { state, ledgerTail } from "./store.js";
 import { gradeStats, grades } from "./grader.js";
 import { indexStats } from "./comps.js";
@@ -35,6 +36,15 @@ padding:0 3.5vw;height:74px;background:#100f0acc;backdrop-filter:blur(4px);borde
 .hd nav{display:flex;gap:30px;font:700 12.5px var(--lab);letter-spacing:.16em;text-transform:uppercase}
 .hd nav a:hover{color:var(--signal)}
 .papertag{border:1px solid var(--red);color:#ff9d90;padding:6px 13px;font:700 10.5px var(--lab);letter-spacing:.2em}
+.livetag{border:1px solid var(--green);color:var(--green);padding:6px 13px;font:700 10.5px var(--lab);letter-spacing:.2em}
+
+/* buy widget */
+.buybox{margin-top:18px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.qty{display:inline-flex;align-items:center;border:2px solid var(--ink);background:#fff}
+.qty button{all:unset;cursor:pointer;font:400 1.4rem var(--disp);padding:6px 16px;color:var(--ink)}
+.qty button:hover{background:var(--signal)}
+.qty b{font:400 1.3rem var(--disp);min-width:2ch;text-align:center;color:var(--ink)}
+.buycta{border:0;cursor:pointer;margin-top:0}
 @media(max-width:760px){.hd nav{display:none}}
 
 /* ticker */
@@ -170,7 +180,7 @@ function shell(title: string, body: string, ticker?: string): string {
 <header class="hd">
   <a class="wordmark" href="/">NERD<b>NAME</b><span style="font:10px var(--lab);vertical-align:top">®</span></a>
   <nav><a href="/raffles">Raffles</a><a href="/vault">The Vault</a><a href="/grades">Receipts</a><a href="/feed">Live Feed</a></nav>
-  <span class="papertag">● PAPER MODE</span>
+  ${cfg.live ? `<span class="livetag">● LIVE${cfg.devnet ? " · DEVNET" : ""}</span>` : `<span class="papertag">● PAPER MODE</span>`}
 </header>
 ${ticker ? (() => {
   // repeat short content so one copy always exceeds the viewport, then
@@ -309,13 +319,22 @@ ${done.length ? `<section>
       <div class="fill ${r.status === "resolved" ? "done" : ""}" style="background:#10100a22"><i style="width:${pct}%"></i></div>
       ${r.status === "open" && r.kind === "paid" ? `<p style="margin-top:14px;font:700 11px var(--lab);letter-spacing:.1em;text-transform:uppercase">
       fill deadline: <span id="cd" data-t="${r.fillDeadline}"></span> — no sellout, everyone refunded</p>` : ""}
+      ${r.status === "open" && r.kind === "paid" && cfg.live ? `
+      <div class="buybox" data-raffle="${r.id}" data-ticket="${r.ticketUsd}">
+        <div class="qty"><button id="qm">−</button><b id="qn">1</b><button id="qp">+</button></div>
+        <button class="cta buycta" id="buy"><small id="buyusd">$${r.ticketUsd.toFixed(2)} USDC</small><b>BUY WITH PHANTOM</b><span>↗</span></button>
+        <p id="paymsg" class="dim" style="font-size:12px;margin-top:8px"></p>
+      </div>` : ""}
+      ${r.status === "open" && r.kind === "paid" && !cfg.live ? `<p style="margin-top:12px;font:700 10.5px var(--lab);letter-spacing:.14em;text-transform:uppercase;opacity:.55">paper mode — tickets are bought by the simulator, not by people</p>` : ""}
     </div>
   </div>
   <div class="receipts">
     <h3>FAIRNESS RECEIPTS</h3>
     <table>
       <tr><td>commitment (published before any ticket)</td><td>${r.commitHash}</td></tr>
+      ${r.commitSig ? `<tr><td>commit anchored on-chain</td><td><a style="color:var(--signal)" href="https://solscan.io/tx/${r.commitSig}${cfg.devnet ? "?cluster=devnet" : ""}">${r.commitSig}</a></td></tr>` : ""}
       <tr><td>resolve slot (named in the commitment)</td><td>${r.resolveSlot}</td></tr>
+      ${r.revealSig ? `<tr><td>reveal anchored on-chain</td><td><a style="color:var(--signal)" href="https://solscan.io/tx/${r.revealSig}${cfg.devnet ? "?cluster=devnet" : ""}">${r.revealSig}</a></td></tr>` : ""}
       ${r.seed ? `<tr><td>seed (revealed at resolution)</td><td>${r.seed}</td></tr>` : ""}
       ${r.blockhash ? `<tr><td>solana blockhash used</td><td>${r.blockhash}</td></tr>` : ""}
       ${r.winner ? `<tr><td>winner (ticket ${(r.winnerIndex ?? 0) + 1} of ${r.tickets})</td><td>${r.winner}</td></tr>` : ""}
@@ -329,7 +348,35 @@ ${done.length ? `<section>
 const cd=document.getElementById('cd');
 if(cd){const t=+cd.dataset.t;const f=()=>{const s=Math.max(0,(t-Date.now())/1000|0);
 cd.textContent=s>3600?((s/3600)|0)+'h '+(((s%3600)/60)|0)+'m':((s/60)|0)+'m '+(s%60|0)+'s';};f();setInterval(f,1000)}
-</script>`));
+</script>
+${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
+<script>
+(function(){
+  const box=document.querySelector('.buybox'); if(!box) return;
+  const price=+box.dataset.ticket, id=box.dataset.raffle;
+  let n=1;
+  const qn=document.getElementById('qn'), usd=document.getElementById('buyusd'), msg=document.getElementById('paymsg');
+  const draw=()=>{qn.textContent=n; usd.textContent='$'+(n*price).toFixed(2)+' USDC';};
+  document.getElementById('qm').onclick=()=>{n=Math.max(1,n-1);draw();};
+  document.getElementById('qp').onclick=()=>{n=Math.min(25,n+1);draw();};
+  document.getElementById('buy').onclick=async()=>{
+    try{
+      const ph=window.phantom?.solana||window.solana;
+      if(!ph){msg.textContent='phantom not found — install the extension';return;}
+      msg.textContent='connecting…';
+      await ph.connect();
+      msg.textContent='building transaction…';
+      const j=await (await fetch('/api/paytx?raffle='+id+'&n='+n+'&payer='+ph.publicKey.toBase58())).json();
+      if(!j.ok){msg.textContent=j.why;return;}
+      const tx=solanaWeb3.Transaction.from(Uint8Array.from(atob(j.tx),c=>c.charCodeAt(0)));
+      msg.textContent='sign it in phantom…';
+      const {signature}=await ph.signAndSendTransaction(tx);
+      msg.textContent='sent: '+signature.slice(0,16)+'… tickets credit when it confirms (~30s)';
+      setTimeout(()=>location.reload(), 30000);
+    }catch(e){msg.textContent=String(e.message||e).slice(0,90);}
+  };
+})();
+</script>` : ""}`));
   });
 
   app.get("/vault", (_req, res) => {

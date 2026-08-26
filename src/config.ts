@@ -15,12 +15,38 @@ const str = (k: string, def = "") => process.env[k] ?? def;
 const dataDir = path.join(root, "data");
 fs.mkdirSync(dataDir, { recursive: true });
 
+const bool = (k: string, def: boolean) =>
+  (process.env[k] ?? String(def)).toLowerCase() === "true";
+
+const live = bool("LIVE_MODE", false);
+const devnet = bool("DEVNET", false);
+
 export const cfg = {
   root,
   dataDir,
   port: num("PORT", 8630),
-  paper: true, // PAPER MODE — nothing on chain moves. The whole point of v0.
+  /** paper = simulation with receipts. live = real chain. Never both. */
+  paper: !live,
+  live,
+  devnet,
   paperBudget: num("PAPER_BUDGET", 500),
+
+  // chain
+  rpcUrl: str("RPC_URL", devnet ? "https://api.devnet.solana.com" : "https://api.mainnet-beta.solana.com"),
+  usdcMint: str("USDC_MINT", devnet
+    ? "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" // circle devnet USDC
+    : "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+  tokenMint: str("TOKEN_MINT"), // our launched token (holder raffles) — empty until launch
+  ansemMint: str("ANSEM_MINT"), // $ANSEM — holder-raffle weight boost + ticket currency
+  ansemBoost: num("ANSEM_BOOST", 1.5), // holder-raffle entry multiplier for ANSEM holders
+  ansemMinUsd: num("ANSEM_MIN", 10), // min ANSEM (ui amount) to qualify for the boost
+  ansemPerUsd: num("ANSEM_PER_USD", 0), // ANSEM accepted for tickets at this rate (0 = USDC only)
+  walletSecret: str("WALLET_SECRET"), // base58 or JSON byte array; empty → keypair generated to data/
+  adminKey: str("ADMIN_KEY"), // guards /api/admin/* in live mode
+
+  // live guardrails (on top of the paper-era sniper guardrails)
+  liveMaxCardUsd: num("LIVE_MAX_CARD_USD", 50), // hard per-card cap for real buys
+  payWatchEverySec: num("PAY_WATCH_EVERY_SEC", 20),
 
   // sniper
   minEdge: num("MIN_EDGE", 0.15),

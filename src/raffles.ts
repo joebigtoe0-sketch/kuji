@@ -3,6 +3,9 @@ import { cfg } from "./config.js";
 import { state, save, ledger, type Raffle, type VaultCard } from "./store.js";
 import { makeSeed, commitHash, currentSlot, blockhashAtOrAfter, winningIndex } from "./draw.js";
 import { log } from "./log.js";
+import { publishCommit, publishReveal } from "./commitchain.js";
+import { queuePayout } from "./payouts.js";
+import { halted } from "./halt.js";
 
 /**
  * Raffles, both kinds:
@@ -48,13 +51,25 @@ const NERD_OPEN = [
 
 /** Keep MAX_OPEN_RAFFLES paid raffles running from the vault, oldest first. */
 export async function autoRaffle(): Promise<void> {
+  if (halted()) return;
   const open = state.raffles.filter((r) => r.kind === "paid" && r.status === "open").length;
   if (open >= cfg.maxOpenRaffles) return;
   const card = state.vault
-    .filter((v) => v.status === "vault")
+    .filter((v) => v.status === "vault" && !suspectComp(v))
     .sort((a, b) => a.boughtAt - b.boughtAt)[0];
   if (!card) return;
   await createPaidRaffle(card);
+}
+
+/**
+ * THE RULE: a card whose edge looks too good to be true never raffles at
+ * that comp — a bogus comp would mean overpriced tickets sold to real
+ * people. Suspect cards sit in the vault until a human re-prices them.
+ */
+export function suspectComp(v: VaultCard): boolean {
+  if (v.compUsd <= 0 || v.paidUsd <= 0) return true;
+  const edge = (v.compUsd - v.paidUsd) / v.compUsd;
+  return edge > cfg.maxEdge;
 }
 
 export async function createPaidRaffle(card: VaultCard): Promise<Raffle> {
@@ -75,11 +90,14 @@ export async function createPaidRaffle(card: VaultCard): Promise<Raffle> {
     status: "open",
   };
   saveSeed(id, seed);
+  // the commit must exist on-chain BEFORE any ticket can sell — in live
+  // mode a failed publish aborts the open (card stays in the vault)
+  r.commitSig = await publishCommit(id, r.commitHash, resolveSlot);
   card.raffleId = id;
   card.status = "raffled";
   state.raffles.push(r);
   save();
-  ledger("raffle-open", { id, kind: "paid", nft: card.nft, item: card.itemName, tickets, ticketUsd, commit: r.commitHash, resolveSlot, note: NERD_OPEN[Math.floor(Math.random() * NERD_OPEN.length)] });
+  ledger("raffle-open", { id, kind: "paid", nft: card.nft, item: card.itemName, tickets, ticketUsd, commit: r.commitHash, commitSig: r.commitSig, resolveSlot, note: NERD_OPEN[Math.floor(Math.random() * NERD_OPEN.length)] });
   log.info("raffle", `OPEN ${id}: ${card.itemName.slice(0, 50)} — ${tickets} x $${ticketUsd} (comp $${card.compUsd})`);
   return r;
 }
@@ -105,9 +123,14 @@ export async function tickRaffles(): Promise<void> {
     if (r.kind === "paid" && soldN < r.tickets && Date.now() > r.fillDeadline) {
       r.status = "refunded";
       if (card) { card.status = "vault"; card.raffleId = undefined; }
+      // live: every buyer gets their money back, aggregated per wallet
+      const owed = new Map<string, number>();
+      for (const t of r.sold) owed.set(t.buyer, (owed.get(t.buyer) ?? 0) + t.paidUsd);
+      for (const [buyer, usd] of owed)
+        queuePayout({ kind: "usdc", to: buyer, amountUsd: +usd.toFixed(2), raffleId: r.id, reason: "fill-or-refund: raffle did not sell out" });
       save();
-      ledger("raffle-refund", { raffle: r.id, sold: soldN, of: r.tickets });
-      log.info("raffle", `REFUND ${r.id} — ${soldN}/${r.tickets} sold`);
+      ledger("raffle-refund", { raffle: r.id, sold: soldN, of: r.tickets, refunds: owed.size });
+      log.info("raffle", `REFUND ${r.id} — ${soldN}/${r.tickets} sold, ${owed.size} refunds queued`);
       continue;
     }
     if (soldN < r.tickets) continue; // still filling
@@ -135,15 +158,20 @@ export async function tickRaffles(): Promise<void> {
         // proceeds return; the SPREAD is realized profit; half funds holder raffles
         const proceeds = r.tickets * r.ticketUsd;
         const profit = +(proceeds - card.paidUsd).toFixed(2);
-        state.walletUsd += proceeds;
+        if (!cfg.live) state.walletUsd += proceeds; // live: the money already arrived on-chain
         state.realizedProfitUsd += profit;
         const toPool = +(Math.max(0, profit) * cfg.holderRaffleShare).toFixed(2);
-        state.holderPoolUsd += toPool;
-        state.walletUsd -= toPool;
+        state.holderPoolUsd += toPool; // live: an earmark inside the same wallet
+        if (!cfg.live) state.walletUsd -= toPool;
         ledger("profit", { raffle: r.id, proceeds, cost: card.paidUsd, profit, toHolderPool: toPool });
       }
+      // the prize: the NFT goes to the winner's wallet (live buyers ARE wallets).
+      // Physical redemption is theirs via Collector Crypt's vault afterwards.
+      if (cfg.live && r.winner)
+        queuePayout({ kind: "nft", to: r.winner, nft: r.nft, raffleId: r.id, reason: `raffle prize (ticket ${idx + 1}/${owners.length})` });
+      r.revealSig = await publishReveal(r.id, seed, blockhash, idx);
       save();
-      ledger("raffle-resolve", { raffle: r.id, winner: r.winner, winnerIndex: idx, of: owners.length, blockhash, seedRevealed: seed });
+      ledger("raffle-resolve", { raffle: r.id, winner: r.winner, winnerIndex: idx, of: owners.length, blockhash, seedRevealed: seed, revealSig: r.revealSig });
       log.info("raffle", `RESOLVED ${r.id} — winner ${r.winner} (ticket ${idx + 1}/${owners.length})`);
     } catch (e) {
       log.warn("raffle", `${r.id} resolve: ${String(e).slice(0, 100)}`);
@@ -153,9 +181,10 @@ export async function tickRaffles(): Promise<void> {
 
 /** Holder raffle: when the pool affords a vault card, raffle it to holders. */
 export async function tickHolderRaffles(holders: { wallet: string; balance: number }[]): Promise<void> {
+  if (halted()) return;
   if (state.raffles.some((r) => r.kind === "holder" && r.status === "open")) return;
   const candidate = state.vault
-    .filter((v) => v.status === "vault" && v.compUsd <= state.holderPoolUsd)
+    .filter((v) => v.status === "vault" && v.compUsd <= state.holderPoolUsd && !suspectComp(v))
     .sort((a, b) => b.compUsd - a.compUsd)[0];
   if (!candidate || !holders.length) return;
   const slotNow = await currentSlot();
@@ -174,6 +203,7 @@ export async function tickHolderRaffles(holders: { wallet: string; balance: numb
     commitHash: commitHash(manifest, seed, resolveSlot), status: "open",
   };
   saveSeed(id, seed);
+  r.commitSig = await publishCommit(id, r.commitHash, resolveSlot);
   state.holderPoolUsd = +(state.holderPoolUsd - candidate.compUsd).toFixed(2);
   candidate.raffleId = id;
   candidate.status = "raffled";
