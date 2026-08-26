@@ -1,8 +1,9 @@
 import type express from "express";
 import { cfg } from "./config.js";
-import { state, ledgerTail } from "./store.js";
+import { state, ledgerTail, type Machine } from "./store.js";
 import { gradeStats, grades } from "./grader.js";
 import { indexStats } from "./comps.js";
+import { marketFor } from "./market.js";
 
 /**
  * The machine's storefront — same design language as quantriku.fun's landing:
@@ -114,6 +115,40 @@ font:700 10px var(--lab);letter-spacing:.18em;text-transform:uppercase;box-shado
 .fill.done i{background:var(--green)}
 .winline{margin-top:10px;font:700 11px var(--lab);letter-spacing:.12em;text-transform:uppercase;color:var(--green)}
 
+/* capsule machine */
+.mach{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:0;background:var(--ink2);
+border:1px solid #f4ecca30;overflow:hidden}
+.mach .art{position:relative;background:radial-gradient(ellipse at 50% 35%,#2b260f 0%,#131209 72%);
+display:grid;place-items:center;min-height:340px}
+.mach .art img{max-height:290px;max-width:80%;filter:drop-shadow(0 16px 26px #000d)}
+.mach .bd{padding:30px 32px}
+.mach h3{font:400 clamp(1.5rem,2.6vw,2.2rem)/1 var(--disp);text-transform:uppercase}
+.pool{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0}
+.chip{border:1px solid #f4ecca38;padding:5px 11px;font:700 10.5px var(--lab);letter-spacing:.1em;text-transform:uppercase}
+.chip.card{border-color:var(--signal);color:var(--signal)}
+.chip s{opacity:.45}
+.machmeta{display:flex;gap:26px;align-items:baseline;margin:6px 0 2px}
+.machmeta .px{font:400 2.2rem var(--disp);color:var(--signal)}
+.machmeta small{font:700 10px var(--lab);letter-spacing:.16em;text-transform:uppercase;opacity:.6}
+@media(max-width:860px){.mach{display:block}}
+/* capsule reveal */
+.reveal{position:fixed;inset:0;background:#100f0ae6;z-index:200;display:grid;place-items:center}
+.reveal .rc{background:var(--cream);color:var(--ink);padding:40px 48px;text-align:center;
+transform:rotate(-2deg);box-shadow:18px 20px #000a;animation:pop .35s cubic-bezier(.2,1.6,.4,1)}
+.reveal .rc b{font:400 2.2rem var(--disp);text-transform:uppercase;display:block}
+.reveal .rc span{font:700 11px var(--lab);letter-spacing:.2em;text-transform:uppercase;opacity:.6}
+@keyframes pop{from{transform:scale(.4) rotate(-14deg);opacity:0}}
+
+/* ticket market */
+.mkt{margin-top:22px;border:2px solid var(--ink);padding:16px 18px;background:#efe6c0}
+.mkt h4{font:400 1.2rem var(--disp);text-transform:uppercase;margin-bottom:4px}
+.mkt .imp{font:700 10.5px var(--lab);letter-spacing:.12em;text-transform:uppercase;opacity:.65;margin-bottom:10px}
+.mkt table{width:100%;border-collapse:collapse;font-size:12.5px}
+.mkt td{padding:6px 6px;border-bottom:1px solid #10100a22}
+.mkt .buy{cursor:pointer;background:var(--ink);color:var(--signal);border:0;padding:5px 12px;
+font:700 10px var(--lab);letter-spacing:.14em;text-transform:uppercase}
+.mkt .buy:hover{background:var(--signal);color:var(--ink)}
+
 /* how-it-works */
 .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px}
 .step{border:1px solid #f4ecca30;background:var(--ink2);padding:34px 30px 30px;position:relative}
@@ -179,7 +214,7 @@ function shell(title: string, body: string, ticker?: string): string {
 <div class="noise"></div>
 <header class="hd">
   <a class="wordmark" href="/">NERD<b>NAME</b><span style="font:10px var(--lab);vertical-align:top">®</span></a>
-  <nav><a href="/raffles">Raffles</a><a href="/vault">The Vault</a><a href="/grades">Receipts</a><a href="/feed">Live Feed</a></nav>
+  <nav>${(() => { const m = state.machines.find((x) => x.status === "open"); return m ? `<a href="/machine/${m.id}" style="color:var(--signal)">Candy Machine</a>` : ""; })()}<a href="/raffles">Raffles</a><a href="/vault">The Vault</a><a href="/grades">Receipts</a><a href="/feed">Live Feed</a></nav>
   ${cfg.live ? `<span class="livetag">● LIVE${cfg.devnet ? " · DEVNET" : ""}</span>` : `<span class="papertag">● PAPER MODE</span>`}
 </header>
 ${ticker ? (() => {
@@ -220,6 +255,43 @@ function prodCard(r: any, card: any): string {
   </div></a>`;
 }
 
+function poolChips(m: Machine): string {
+  // aggregate the pool into "label xN (M left)" chips, card first
+  const agg = new Map<string, { total: number; left: number; isCard: boolean; valueUsd: number }>();
+  for (const p of m.prizes) {
+    const key = p.kind === "card" ? "THE CARD" : p.label;
+    const a = agg.get(key) ?? { total: 0, left: 0, isCard: p.kind === "card", valueUsd: p.valueUsd };
+    a.total++;
+    if (!p.claimedBy) a.left++;
+    agg.set(key, a);
+  }
+  return [...agg.entries()]
+    .sort((a, b) => b[1].valueUsd - a[1].valueUsd)
+    .map(([label, a]) => `<span class="chip ${a.isCard ? "card" : ""}">${a.isCard ? `THE CARD $${a.valueUsd}` : label}
+      ${a.left ? `× ${a.left}/${a.total}` : `<s>× 0/${a.total} gone</s>`}</span>`)
+    .join("");
+}
+
+function machBlock(m: Machine, card: { image?: string } | undefined): string {
+  const opened = m.opens.length;
+  return `<div class="mach">
+    <div class="art">${card?.image ? `<img src="${card.image}" alt="">` : ""}
+      ${m.status === "closed" ? `<span class="ribbon dead">EMPTY</span>` : `<span class="ribbon">CAPSULES LIVE</span>`}</div>
+    <div class="bd">
+      <p class="lab" style="color:var(--acid)">CAPSULE MACHINE ${m.id} · EVERY ENVELOPE PRICED · ZERO HOUSE EDGE</p>
+      <h3>${m.title.slice(0, 60)}</h3>
+      <div class="machmeta">
+        <div class="px">$${m.priceUsd}<small style="display:block">per capsule</small></div>
+        <div><b style="font:400 1.5rem var(--disp)">${m.capsules - opened}</b><small style="display:block">capsules left</small></div>
+        ${m.rolledInUsd ? `<div><b style="font:400 1.5rem var(--disp);color:var(--green)">+$${m.rolledInUsd}</b><small style="display:block">rolled in</small></div>` : ""}
+      </div>
+      <div class="fill" style="margin:10px 0 4px"><i style="width:${(100 * opened) / m.capsules}%"></i></div>
+      <div class="pool">${poolChips(m)}</div>
+      ${m.status === "open" ? `<a class="cta" href="/machine/${m.id}"><small>the pool is public — count what's left</small><b>OPEN A CAPSULE</b><span>↗</span></a>` : `<p class="lab" style="opacity:.6">closed — unclaimed cash rolled to the next machine</p>`}
+    </div>
+  </div>`;
+}
+
 export function mountSite(app: express.Express): void {
   const cardOf = (nft: string) => state.vault.find((v) => v.nft === nft);
 
@@ -250,9 +322,18 @@ export function mountSite(app: express.Express): void {
   </div>
 </section>
 
+${(() => {
+  const m = state.machines.find((x) => x.status === "open") ?? [...state.machines].reverse()[0];
+  return m ? `<section>
+  <h2>THE CANDY<br><i>MACHINE.</i></h2>
+  <p class="side">$${m.priceUsd} A CAPSULE · THE WHOLE POOL IS PUBLIC · BUY THEM ALL AND YOU GET IT ALL BACK</p>
+  ${machBlock(m, cardOf(m.nft))}
+</section>` : "";
+})()}
+
 ${live.length ? `<section>
   <h2>LIVE <i>RAFFLES.</i></h2>
-  <p class="side">FILL OR REFUND — NO SELLOUT, NO DRAW, MONEY BACK</p>
+  <p class="side">FILL OR REFUND — NO SELLOUT, NO DRAW, MONEY BACK · TICKETS TRADE UNTIL THE DRAW</p>
   <div class="shelf">${live.map((r) => prodCard(r, cardOf(r.nft))).join("")}</div>
 </section>` : ""}
 
@@ -326,6 +407,18 @@ ${done.length ? `<section>
         <p id="paymsg" class="dim" style="font-size:12px;margin-top:8px"></p>
       </div>` : ""}
       ${r.status === "open" && r.kind === "paid" && !cfg.live ? `<p style="margin-top:12px;font:700 10.5px var(--lab);letter-spacing:.14em;text-transform:uppercase;opacity:.55">paper mode — tickets are bought by the simulator, not by people</p>` : ""}
+      ${(() => {
+        if (r.kind !== "paid" || r.status !== "open") return "";
+        const mkt = marketFor(r.id);
+        const rows = mkt.listings.slice(0, 6).map((l) => `
+          <tr><td>${l.n} tix</td><td><b>${usd(l.priceUsd)}</b> each</td><td class="dim">${l.seller.slice(0, 14)}</td>
+          <td><button class="buy mktbuy" data-l="${l.id}" data-usd="${(l.n * l.priceUsd).toFixed(2)}">BUY ${usd(l.n * l.priceUsd)}</button></td></tr>`).join("");
+        return `<div class="mkt">
+          <h4>TICKET MARKET</h4>
+          <p class="imp">${mkt.lastPriceUsd ? `last trade ${usd(mkt.lastPriceUsd)}/tix — the market prices this card at ~$${mkt.impliedCardUsd}` : "no trades yet — tickets trade freely until the draw"}</p>
+          ${rows ? `<table>${rows}</table>` : `<p class="dim" style="font-size:12px">no open listings — holders are holding</p>`}
+        </div>`;
+      })()}
     </div>
   </div>
   <div class="receipts">
@@ -348,6 +441,27 @@ ${done.length ? `<section>
 const cd=document.getElementById('cd');
 if(cd){const t=+cd.dataset.t;const f=()=>{const s=Math.max(0,(t-Date.now())/1000|0);
 cd.textContent=s>3600?((s/3600)|0)+'h '+(((s%3600)/60)|0)+'m':((s/60)|0)+'m '+(s%60|0)+'s';};f();setInterval(f,1000)}
+document.querySelectorAll('.mktbuy').forEach(b=>{
+  b.onclick=async()=>{
+    ${cfg.live ? `
+    try{
+      const ph=window.phantom?.solana||window.solana;
+      if(!ph){b.textContent='NO PHANTOM';return;}
+      await ph.connect();
+      const j=await (await fetch('/api/paytx?kind=market&listing='+b.dataset.l+'&payer='+ph.publicKey.toBase58())).json();
+      if(!j.ok){b.textContent=j.why.slice(0,18);return;}
+      const tx=solanaWeb3.Transaction.from(Uint8Array.from(atob(j.tx),c=>c.charCodeAt(0)));
+      await ph.signAndSendTransaction(tx);
+      b.textContent='SENT ✓';
+      setTimeout(()=>location.reload(), 25000);
+    }catch(e){b.textContent='FAILED';}
+    ` : `
+    const j=await (await fetch('/api/market/'+b.dataset.l+'/buy',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({buyer:'you_'+Math.random().toString(36).slice(2,6)})})).json();
+    b.textContent=j.ok?'BOUGHT ✓':'GONE';
+    if(j.ok) setTimeout(()=>location.reload(), 1200);
+    `}
+  };
+});
 </script>
 ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
 <script>
@@ -377,6 +491,91 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
   };
 })();
 </script>` : ""}`));
+  });
+
+  app.get("/machine/:id", (req, res) => {
+    const m = state.machines.find((x) => x.id === req.params.id);
+    if (!m) return res.status(404).type("html").send(shell("404", `<section><h1>NO SUCH<br><i>MACHINE.</i></h1></section>`));
+    const card = cardOf(m.nft);
+    const feed = [...m.opens].reverse().slice(0, 30).map((o) => {
+      const p = m.prizes[o.prizeIdx];
+      return `<tr><td class="dim">${ago(o.at)}</td><td>${o.buyer.slice(0, 16)}</td>
+      <td class="${p.kind === "card" ? "amber" : ""}">${p.label.slice(0, 44)}</td><td>${usd(p.valueUsd)}</td></tr>`;
+    }).join("");
+    res.type("html").send(shell(`machine ${m.id}`, `
+<section>
+  <p class="lab" style="color:var(--acid)">CAPSULE MACHINE · ${m.status.toUpperCase()} · EVERY OPEN VERIFIABLE THE MOMENT IT HAPPENS</p>
+  <div style="margin-top:14px">${machBlock(m, card)}</div>
+
+  ${m.status === "open" ? `
+  <div style="margin-top:26px;display:flex;gap:18px;align-items:center;flex-wrap:wrap">
+    ${cfg.live ? `
+    <div class="qty" style="background:#fff"><button id="qm">−</button><b id="qn">1</b><button id="qp">+</button></div>
+    <button class="cta buycta" id="openbtn"><small id="openusd">$${m.priceUsd.toFixed(2)} USDC</small><b>OPEN WITH PHANTOM</b><span>◉</span></button>
+    ` : `
+    <button class="cta buycta" id="openbtn"><small>paper mode — fake money, real draw</small><b>OPEN ONE (PAPER)</b><span>◉</span></button>
+    `}
+    <p id="paymsg" class="dim" style="font-size:12px"></p>
+  </div>` : ""}
+
+  <div class="receipts" style="margin-top:30px">
+    <h3>HOW THIS IS FAIR</h3>
+    <table>
+      <tr><td>prize table committed</td><td>${m.commitHash}</td></tr>
+      ${m.commitSig ? `<tr><td>commit anchored on-chain</td><td><a style="color:var(--signal)" href="https://solscan.io/tx/${m.commitSig}${cfg.devnet ? "?cluster=devnet" : ""}">${m.commitSig}</a></td></tr>` : ""}
+      <tr><td>per-open draw</td><td>sha256(machineId | your tx signature | blockhash of your confirmation slot) over the remaining pool — you fix your signature before that blockhash exists; we control neither</td></tr>
+      <tr><td>the rollover rule</td><td>when the card pops, the machine closes and every unclaimed envelope rolls into the next machine — the house never keeps one</td></tr>
+      <tr><td>recompute every open</td><td><a style="color:var(--signal)" href="/api/verify-machine/${m.id}">/api/verify-machine/${m.id}</a></td></tr>
+    </table>
+  </div>
+
+  <h2 style="margin-top:40px;font-size:2rem">RECENT <i>OPENS.</i></h2>
+  <table class="inst"><tr><th>when</th><th>who</th><th>pulled</th><th>value</th></tr>
+  ${feed || `<tr><td colspan="4" class="dim">nobody has dared yet</td></tr>`}</table>
+</section>
+<script>
+(function(){
+  const btn=document.getElementById('openbtn'); if(!btn) return;
+  const msg=document.getElementById('paymsg');
+  const price=${m.priceUsd};
+  let n=1;
+  const qn=document.getElementById('qn'), ou=document.getElementById('openusd');
+  if(qn){const draw=()=>{qn.textContent=n; ou.textContent='$'+(n*price).toFixed(2)+' USDC';};
+    document.getElementById('qm').onclick=()=>{n=Math.max(1,n-1);draw();};
+    document.getElementById('qp').onclick=()=>{n=Math.min(10,n+1);draw();};}
+  function reveal(prizes){
+    const d=document.createElement('div'); d.className='reveal';
+    d.innerHTML='<div class="rc"><span>the capsule holds</span><b>'+prizes.map(p=>p.label).join('<br>')+'</b>'+
+      '<span>'+(prizes.some(p=>p.kind==='card')?'THE CARD IS YOURS':'total $'+prizes.reduce((s,p)=>s+p.valueUsd,0).toFixed(2))+'</span></div>';
+    d.onclick=()=>location.reload();
+    document.body.appendChild(d);
+    setTimeout(()=>location.reload(), 6000);
+  }
+  btn.onclick=async()=>{
+    try{
+      ${cfg.live ? `
+      const ph=window.phantom?.solana||window.solana;
+      if(!ph){msg.textContent='phantom not found';return;}
+      await ph.connect();
+      msg.textContent='building transaction…';
+      const j=await (await fetch('/api/paytx?kind=capsule&machine=${m.id}&n='+n+'&payer='+ph.publicKey.toBase58())).json();
+      if(!j.ok){msg.textContent=j.why;return;}
+      const tx=solanaWeb3.Transaction.from(Uint8Array.from(atob(j.tx),c=>c.charCodeAt(0)));
+      msg.textContent='sign it in phantom…';
+      const {signature}=await ph.signAndSendTransaction(tx);
+      msg.textContent='sent '+signature.slice(0,14)+'… your capsule opens when it confirms (~30s)';
+      setTimeout(()=>location.reload(), 25000);
+      ` : `
+      msg.textContent='drawing against a live solana blockhash…';
+      const j=await (await fetch('/api/machine/${m.id}/open',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({buyer:'you_'+Math.random().toString(36).slice(2,6),n:1})})).json();
+      if(!j.ok){msg.textContent=j.why;return;}
+      reveal(j.prizes);
+      `}
+    }catch(e){msg.textContent=String(e.message||e).slice(0,90);}
+  };
+})();
+</script>
+${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>` : ""}`));
   });
 
   app.get("/vault", (_req, res) => {

@@ -10,7 +10,9 @@ import { mountSite } from "./site.js";
 import { gradeVault } from "./grader.js";
 import { autoRaffle } from "./raffles.js";
 import { simTick, seededHolders } from "./sim.js";
-import { buildPayTx, watchPayments } from "./payments.js";
+import { buildPayTx, buildCapsulePayTx, buildMarketPayTx, watchPayments } from "./payments.js";
+import { autoMachine, openCapsules, verifyMachine } from "./capsules.js";
+import { listTickets, cancelListing, fillListing, marketFor, tickMarket } from "./market.js";
 import { tickPayouts, pendingPayouts, stuckPayouts } from "./payouts.js";
 import { snapshotHolders } from "./holders.js";
 import { halted, setHalt } from "./halt.js";
@@ -87,22 +89,42 @@ app.post("/api/holders", (req, res) => {
   res.json({ ok: false, why: "body must be an array of {wallet,balance}" });
 });
 
-// live ticket payments: the buy widget asks for an unsigned tx to hand Phantom
+// live payments: the buy widgets ask for an unsigned tx to hand Phantom.
+// kind=raffle (default) | capsule | market
 app.get("/api/paytx", async (req, res) => {
-  if (!cfg.live) return res.json({ ok: false, why: "paper mode — tickets are simulated" });
+  if (!cfg.live) return res.json({ ok: false, why: "paper mode — purchases are simulated" });
   if (halted()) return res.json({ ok: false, why: "machine is paused" });
+  const payer = String(req.query.payer ?? "");
+  const n = Math.max(1, Number(req.query.n) || 1);
+  const currency = req.query.currency === "ansem" ? "ansem" as const : "usdc" as const;
   try {
-    const out = await buildPayTx(
-      String(req.query.raffle ?? ""),
-      Math.max(1, Number(req.query.n) || 1),
-      String(req.query.payer ?? ""),
-      req.query.currency === "ansem" ? "ansem" : "usdc",
-    );
+    const out = req.query.kind === "capsule"
+      ? await buildCapsulePayTx(String(req.query.machine ?? ""), n, payer, currency)
+      : req.query.kind === "market"
+        ? await buildMarketPayTx(String(req.query.listing ?? ""), payer)
+        : await buildPayTx(String(req.query.raffle ?? ""), n, payer, currency);
     res.json(out);
   } catch (e) {
     res.json({ ok: false, why: String(e).slice(0, 120) });
   }
 });
+
+// paper-mode interactions (the sim uses these paths too)
+app.post("/api/machine/:id/open", async (req, res) => {
+  if (cfg.live) return res.json({ ok: false, why: "live mode opens via /api/paytx?kind=capsule" });
+  const buyer = String(req.body?.buyer ?? ("anon-" + crypto.randomBytes(3).toString("hex")));
+  res.json(await openCapsules(req.params.id, buyer, Math.max(1, Number(req.body?.n) || 1)));
+});
+app.get("/api/verify-machine/:id", (req, res) => res.json(verifyMachine(req.params.id)));
+app.post("/api/market/list", (req, res) => {
+  res.json(listTickets(String(req.body?.raffle ?? ""), String(req.body?.seller ?? ""), Number(req.body?.n) || 0, Number(req.body?.price) || 0));
+});
+app.post("/api/market/:id/cancel", (req, res) => res.json(cancelListing(req.params.id, String(req.body?.seller ?? ""))));
+app.post("/api/market/:id/buy", (req, res) => {
+  if (cfg.live) return res.json({ ok: false, why: "live mode fills via /api/paytx?kind=market" });
+  res.json(fillListing(req.params.id, String(req.body?.buyer ?? ("anon-" + crypto.randomBytes(3).toString("hex")))));
+});
+app.get("/api/market/:raffleId", (req, res) => res.json(marketFor(req.params.raffleId)));
 
 // ---------- admin (live ops) ----------
 const admin = (req: express.Request): boolean =>
@@ -170,6 +192,8 @@ setInterval(() => {
 }, 60_000);
 setInterval(() => void gradeVault().catch(() => {}), 5 * 60_000);
 setInterval(() => void autoRaffle().catch((e) => log.warn("raffle", String(e).slice(0, 80))), 45_000);
+setInterval(() => void autoMachine().catch((e) => log.warn("capsule", String(e).slice(0, 80))), 50_000);
+setInterval(() => { try { tickMarket(); } catch {} }, 30_000);
 if (cfg.live) {
   setInterval(() => void watchPayments().catch((e) => log.warn("pay", String(e).slice(0, 100))), cfg.payWatchEverySec * 1000);
   setInterval(() => void tickPayouts().catch((e) => log.warn("payout", String(e).slice(0, 100))), 20_000);

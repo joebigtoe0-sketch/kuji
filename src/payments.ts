@@ -10,6 +10,9 @@ import { cfg } from "./config.js";
 import { connection, walletPk } from "./wallet.js";
 import { state, save, ledger } from "./store.js";
 import { queuePayout } from "./payouts.js";
+import { openCapsules } from "./capsules.js";
+import { fillListing } from "./market.js";
+import { blockhashOfSlot } from "./draw.js";
 import { log } from "./log.js";
 
 /**
@@ -34,20 +37,13 @@ let seenSigs: string[] = (() => {
 })();
 const persistSigs = () => fs.writeFileSync(SIGS_FILE, JSON.stringify(seenSigs.slice(-2000)));
 
-/** Build the unsigned payment tx for the buy widget. */
-export async function buildPayTx(raffleId: string, n: number, payer: string, currency: "usdc" | "ansem" = "usdc"): Promise<{ ok: boolean; tx?: string; why?: string }> {
-  const r = state.raffles.find((x) => x.id === raffleId);
-  if (!r || r.status !== "open" || r.kind !== "paid") return { ok: false, why: "no open paid raffle" };
-  const left = r.tickets - r.sold.reduce((s, t) => s + t.n, 0);
-  if (n < 1 || n > left) return { ok: false, why: `only ${left} tickets left` };
-
+/** Unsigned transfer+memo tx — the shared shape of every purchase. */
+async function buildTransfer(payer: string, usd: number, memo: string, currency: "usdc" | "ansem"): Promise<string> {
   const useAnsem = currency === "ansem" && !!cfg.ansemMint && cfg.ansemPerUsd > 0;
   const mint = new PublicKey(useAnsem ? cfg.ansemMint : cfg.usdcMint);
   const dec = (await getMint(connection, mint)).decimals;
-  const usd = +(n * r.ticketUsd).toFixed(2);
   const uiAmount = useAnsem ? usd * cfg.ansemPerUsd : usd;
   const amount = BigInt(Math.round(uiAmount * 10 ** dec));
-
   const payerPk = new PublicKey(payer);
   const from = getAssociatedTokenAddressSync(mint, payerPk, true);
   const to = getAssociatedTokenAddressSync(mint, walletPk, true);
@@ -57,12 +53,40 @@ export async function buildPayTx(raffleId: string, n: number, payer: string, cur
     new TransactionInstruction({
       keys: [{ pubkey: payerPk, isSigner: true, isWritable: false }],
       programId: MEMO,
-      data: Buffer.from(`NERD:TICKETS:${raffleId}:${n}`, "utf8"),
+      data: Buffer.from(memo, "utf8"),
     }),
   );
   tx.feePayer = payerPk;
   tx.recentBlockhash = (await connection.getLatestBlockhash("confirmed")).blockhash;
-  return { ok: true, tx: tx.serialize({ requireAllSignatures: false }).toString("base64") };
+  return tx.serialize({ requireAllSignatures: false }).toString("base64");
+}
+
+/** Build the unsigned payment tx for the raffle buy widget. */
+export async function buildPayTx(raffleId: string, n: number, payer: string, currency: "usdc" | "ansem" = "usdc"): Promise<{ ok: boolean; tx?: string; why?: string }> {
+  const r = state.raffles.find((x) => x.id === raffleId);
+  if (!r || r.status !== "open" || r.kind !== "paid") return { ok: false, why: "no open paid raffle" };
+  const left = r.tickets - r.sold.reduce((s, t) => s + t.n, 0);
+  if (n < 1 || n > left) return { ok: false, why: `only ${left} tickets left` };
+  const usd = +(n * r.ticketUsd).toFixed(2);
+  return { ok: true, tx: await buildTransfer(payer, usd, `NERD:TICKETS:${raffleId}:${n}`, currency) };
+}
+
+/** Capsule opens: the payment tx ITSELF becomes the draw entropy. */
+export async function buildCapsulePayTx(machineId: string, n: number, payer: string, currency: "usdc" | "ansem" = "usdc"): Promise<{ ok: boolean; tx?: string; why?: string }> {
+  const m = state.machines.find((x) => x.id === machineId);
+  if (!m || m.status !== "open") return { ok: false, why: "no open machine" };
+  const left = m.prizes.filter((p) => !p.claimedBy).length;
+  if (n < 1 || n > Math.min(left, 10)) return { ok: false, why: `1-${Math.min(left, 10)} capsules per tx` };
+  const usd = +(n * m.priceUsd).toFixed(2);
+  return { ok: true, tx: await buildTransfer(payer, usd, `NERD:CAPSULE:${machineId}:${n}`, currency) };
+}
+
+/** Secondary-market fill: buyer pays the machine wallet (escrow leg). */
+export async function buildMarketPayTx(listingId: string, payer: string): Promise<{ ok: boolean; tx?: string; why?: string }> {
+  const l = state.market.find((x) => x.id === listingId && x.status === "open");
+  if (!l) return { ok: false, why: "listing gone" };
+  const usd = +(l.n * l.priceUsd).toFixed(2);
+  return { ok: true, tx: await buildTransfer(payer, usd, `NERD:MKT:${listingId}`, "usdc") };
 }
 
 /** How much of `mint` landed in OUR ATA in this tx, and who sent it. */
@@ -101,29 +125,68 @@ export async function watchPayments(): Promise<void> {
         parsed = await connection.getParsedTransaction(s.signature, { maxSupportedTransactionVersion: 0 });
       } catch { continue; }
       const memo = memoOf(parsed);
-      const m = memo?.match(/^NERD:TICKETS:([a-f0-9]+):(\d+)$/);
-      if (!m) continue; // not a ticket payment (buys, payouts, dust)
-      const [, raffleId, claimedN] = m;
       const { amount, payer } = receivedDelta(parsed, mintStr);
-      if (!payer || amount <= 0) continue;
-
-      const r = state.raffles.find((x) => x.id === raffleId);
+      if (!memo || !payer || amount <= 0) continue;
       const usdReceived = mintStr === cfg.usdcMint ? amount : amount / cfg.ansemPerUsd;
-      if (!r || r.kind !== "paid" || r.status !== "open") {
-        queuePayout({ kind: "usdc", to: payer, amountUsd: +usdReceived.toFixed(2), raffleId: raffleId, reason: "raffle not open — full refund" });
-        continue;
+      const refund = (usd: number, ref: string, reason: string) => {
+        if (usd >= 0.5) queuePayout({ kind: "usdc", to: payer, amountUsd: +usd.toFixed(2), raffleId: ref, reason });
+      };
+
+      const tix = memo.match(/^NERD:TICKETS:([a-f0-9]+):(\d+)$/);
+      const cap = memo.match(/^NERD:CAPSULE:([a-f0-9]+):(\d+)$/);
+      const mkt = memo.match(/^NERD:MKT:([a-f0-9]+)$/);
+
+      if (tix) {
+        const [, raffleId, claimedN] = tix;
+        const r = state.raffles.find((x) => x.id === raffleId);
+        if (!r || r.kind !== "paid" || r.status !== "open") {
+          refund(usdReceived, raffleId, "raffle not open — full refund");
+          continue;
+        }
+        // credit from money received, never from the memo's claim
+        const left = r.tickets - r.sold.reduce((x, t) => x + t.n, 0);
+        const n = Math.min(left, Math.floor(usdReceived / r.ticketUsd + 0.001));
+        if (n > 0) {
+          r.sold.push({ buyer: payer, n, paidUsd: +(n * r.ticketUsd).toFixed(2), at: Date.now() });
+          ledger("ticket-buy", { raffle: r.id, buyer: payer, n, paidUsd: +(n * r.ticketUsd).toFixed(2), sig: s.signature, claimedN: Number(claimedN), currency: mintStr === cfg.usdcMint ? "USDC" : "ANSEM" });
+          log.info("pay", `${payer.slice(0, 8)} bought ${n} ticket(s) in ${r.id} (${s.signature.slice(0, 12)}…)`);
+        }
+        refund(usdReceived - n * r.ticketUsd, r.id, n === 0 ? "sold out — full refund" : "overpayment change");
+      } else if (cap) {
+        const [, machineId] = cap;
+        const m = state.machines.find((x) => x.id === machineId);
+        if (!m || m.status !== "open") {
+          refund(usdReceived, machineId, "machine closed — full refund");
+          continue;
+        }
+        const n = Math.floor(usdReceived / m.priceUsd + 0.001);
+        if (n < 1) { refund(usdReceived, machineId, "below capsule price — refund"); continue; }
+        // the payment tx is the entropy: its sig + its confirmation slot's blockhash
+        let bh: string;
+        try {
+          bh = await blockhashOfSlot(s.slot);
+        } catch {
+          seenSigs = seenSigs.filter((x) => x !== s.signature); // retry next tick
+          continue;
+        }
+        const res = await openCapsules(machineId, payer, n, { txSig: s.signature, slot: s.slot, blockhash: bh });
+        const opened = res.ok ? res.prizes!.length : 0;
+        refund(usdReceived - opened * m.priceUsd, machineId, opened === 0 ? "machine emptied — full refund" : "partial fill — change");
+      } else if (mkt) {
+        const [, listingId] = mkt;
+        const l = state.market.find((x) => x.id === listingId);
+        const gross = l ? +(l.n * l.priceUsd).toFixed(2) : 0;
+        if (!l || l.status !== "open" || usdReceived + 0.01 < gross) {
+          refund(usdReceived, listingId, "listing gone or underpaid — full refund");
+          continue;
+        }
+        const res = fillListing(listingId, payer);
+        if (!res.ok) { refund(usdReceived, listingId, `fill failed (${res.why}) — full refund`); continue; }
+        ledger("market-fill-paid", { listing: listingId, buyer: payer, sig: s.signature, gross });
+        refund(usdReceived - gross, listingId, "overpayment change");
+      } else {
+        continue; // unrelated transfer (buys, payouts, dust)
       }
-      // credit from money received, never from the memo's claim
-      const left = r.tickets - r.sold.reduce((x, t) => x + t.n, 0);
-      const n = Math.min(left, Math.floor(usdReceived / r.ticketUsd + 0.001));
-      if (n > 0) {
-        r.sold.push({ buyer: payer, n, paidUsd: +(n * r.ticketUsd).toFixed(2), at: Date.now() });
-        ledger("ticket-buy", { raffle: r.id, buyer: payer, n, paidUsd: +(n * r.ticketUsd).toFixed(2), sig: s.signature, claimedN: Number(claimedN), currency: mintStr === cfg.usdcMint ? "USDC" : "ANSEM" });
-        log.info("pay", `${payer.slice(0, 8)} bought ${n} ticket(s) in ${r.id} (${s.signature.slice(0, 12)}…)`);
-      }
-      const excess = +(usdReceived - n * r.ticketUsd).toFixed(2);
-      if (excess >= 0.5) // ignore sub-50¢ dust — refund tx fees would eat it
-        queuePayout({ kind: "usdc", to: payer, amountUsd: excess, raffleId: r.id, reason: n === 0 ? "sold out — full refund" : "overpayment change" });
       save();
     }
   }

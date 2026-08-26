@@ -45,11 +45,10 @@ export async function blockhashAtOrAfter(slot: number, maxWalk = 50): Promise<{ 
   throw new Error(`no block found in [${slot}, ${slot + maxWalk})`);
 }
 
-/** Deterministic unbiased winner: index in [0, total). */
-export function winningIndex(seed: string, blockhash: string, total: number): number {
-  if (total <= 0) throw new Error("no tickets");
-  // rejection sampling over 8-byte windows of repeated hashing — unbiased mod
-  let h = crypto.createHash("sha256").update(`${seed}|${blockhash}`).digest();
+/** Rejection-sampled unbiased index in [0, total) from arbitrary input. */
+function sampleIndex(input: string, total: number): number {
+  if (total <= 0) throw new Error("empty pool");
+  let h = crypto.createHash("sha256").update(input).digest();
   const max = 2n ** 64n;
   const limit = max - (max % BigInt(total));
   for (;;) {
@@ -59,6 +58,46 @@ export function winningIndex(seed: string, blockhash: string, total: number): nu
     }
     h = crypto.createHash("sha256").update(h).digest();
   }
+}
+
+/** Deterministic unbiased winner: index in [0, total). */
+export function winningIndex(seed: string, blockhash: string, total: number): number {
+  return sampleIndex(`${seed}|${blockhash}`, total);
+}
+
+/**
+ * Instant-open draw for capsule machines: neither side can steer it.
+ * The buyer's tx signature is fixed before the blockhash of its
+ * confirmation slot exists; the machine controls neither.
+ */
+export function openIndex(machineId: string, txSig: string, blockhash: string, remaining: number): number {
+  return sampleIndex(`${machineId}|${txSig}|${blockhash}`, remaining);
+}
+
+/** Latest confirmed block — entropy source for paper-mode capsule opens.
+ *  Cached 4s: burst opens shouldn't hammer the RPC (paper-only path; live
+ *  entropy comes from each payment tx's own confirmation slot). */
+let lastBlockCache: { at: number; v: { slot: number; blockhash: string } } | undefined;
+export async function latestBlock(): Promise<{ slot: number; blockhash: string }> {
+  if (lastBlockCache && Date.now() - lastBlockCache.at < 4000) return lastBlockCache.v;
+  const v = await latestBlockFresh();
+  lastBlockCache = { at: Date.now(), v };
+  return v;
+}
+async function latestBlockFresh(): Promise<{ slot: number; blockhash: string }> {
+  const tip = await conn.getSlot("confirmed");
+  for (let s = tip; s > tip - 20; s--) {
+    try {
+      const b = await conn.getBlock(s, { maxSupportedTransactionVersion: 0, transactionDetails: "none", rewards: false });
+      if (b?.blockhash) return { slot: s, blockhash: b.blockhash };
+    } catch { /* walk back */ }
+  }
+  throw new Error("no recent confirmed block found");
+}
+
+/** Blockhash of a specific slot (walks FORWARD past skipped slots). */
+export async function blockhashOfSlot(slot: number): Promise<string> {
+  return (await blockhashAtOrAfter(slot)).blockhash;
 }
 
 /** Full independent verification of a resolved draw. */

@@ -19,7 +19,8 @@ export interface VaultCard {
   compBasis: string; // human-readable comp reasoning
   boughtAt: number;
   raffleId?: string; // assigned to a raffle
-  status: "vault" | "raffled" | "awarded" | "holder_prize";
+  machineId?: string; // headline prize of a capsule machine
+  status: "vault" | "raffled" | "machined" | "awarded" | "holder_prize";
 }
 
 export interface Ticket {
@@ -51,12 +52,72 @@ export interface Raffle {
   resolvedAt?: number;
 }
 
+/** One prize inside a capsule machine — a card or a cash envelope. */
+export interface Prize {
+  kind: "card" | "cash";
+  nft?: string;
+  valueUsd: number;
+  label: string;
+  claimedBy?: string; // buyer wallet once popped
+}
+
+export interface CapsuleOpen {
+  buyer: string;
+  txSig: string; // buyer's payment tx (paper: simulated sig) — half the entropy
+  slot: number;
+  blockhash: string; // blockhash of the confirmation slot — the other half
+  prizeIdx: number; // index into machine.prizes
+  at: number;
+}
+
+/**
+ * A capsule machine: N capsules at a fixed price, prize table PUBLIC from
+ * the start and committed (memo-anchored in live mode). Every open draws
+ * uniformly from the REMAINING pool via sha256(machineId|txSig|blockhash) —
+ * the buyer can't know the blockhash when signing, the machine doesn't
+ * control the buyer's signature. Zero-edge: sum(prizes) == N * price.
+ * Rule (in the manifest): when the headline card pops, the machine closes
+ * and unclaimed cash rolls into the next machine — the house keeps nothing.
+ */
+export interface Machine {
+  id: string;
+  title: string;
+  nft: string; // headline card
+  capsules: number;
+  priceUsd: number;
+  prizes: Prize[];
+  opens: CapsuleOpen[];
+  commitHash: string; // sha256 of the manifest (prize table + rules)
+  commitSig?: string;
+  status: "open" | "closed";
+  rolledInUsd: number; // cash rolled in from the previous machine
+  rolledOutUsd?: number; // cash rolled to the next machine at close
+  createdAt: number;
+  closedAt?: number;
+}
+
+/** A secondary-market listing: tickets for sale by a current holder. */
+export interface TicketListing {
+  id: string;
+  raffleId: string;
+  seller: string;
+  n: number;
+  priceUsd: number; // per ticket
+  createdAt: number;
+  status: "open" | "filled" | "cancelled";
+  buyer?: string;
+  filledAt?: number;
+}
+
 interface State {
   walletUsd: number; // paper bankroll
   holderPoolUsd: number; // 50% of realized profit accumulates here
   realizedProfitUsd: number;
+  rolloverUsd: number; // cash from closed machines, owed to the next machine
   vault: VaultCard[];
   raffles: Raffle[];
+  machines: Machine[];
+  market: TicketListing[];
   /** listing index for comps: identityKey -> {price,nft,seen}[] */
   seenPaper: string[]; // nfts already paper-bought (never rebuy)
 }
@@ -70,7 +131,10 @@ export const state: State = (() => {
   }
 })();
 function defaults(): State {
-  return { walletUsd: cfg.paperBudget, holderPoolUsd: 0, realizedProfitUsd: 0, vault: [], raffles: [], seenPaper: [] };
+  return {
+    walletUsd: cfg.paperBudget, holderPoolUsd: 0, realizedProfitUsd: 0, rolloverUsd: 0,
+    vault: [], raffles: [], machines: [], market: [], seenPaper: [],
+  };
 }
 export function save(): void {
   fs.writeFileSync(FILE, JSON.stringify(state, null, 1));

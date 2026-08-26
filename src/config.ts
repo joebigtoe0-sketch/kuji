@@ -12,7 +12,7 @@ const num = (k: string, def: number) => {
 };
 const str = (k: string, def = "") => process.env[k] ?? def;
 
-const dataDir = path.join(root, "data");
+const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(root, "data");
 fs.mkdirSync(dataDir, { recursive: true });
 
 const bool = (k: string, def: boolean) =>
@@ -63,6 +63,11 @@ export const cfg = {
     .split(",").map((s) => s.trim()).filter(Boolean),
 
   gradeAfterH: num("GRADE_AFTER_H", 24),
+
+  // capsule machines
+  capsuleUsd: num("CAPSULE_USD", 1),
+  machineCardShare: num("MACHINE_CARD_SHARE", 0.65), // card ≈ this share of machine value
+  machineMaxCardUsd: num("MACHINE_MAX_CARD_USD", 150), // bigger cards go to raffles instead
 
   // raffles
   ticketsMin: num("TICKETS_MIN", 10),
