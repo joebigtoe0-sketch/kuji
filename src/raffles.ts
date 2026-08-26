@@ -1,0 +1,165 @@
+import crypto from "node:crypto";
+import { cfg } from "./config.js";
+import { state, save, ledger, type Raffle, type VaultCard } from "./store.js";
+import { makeSeed, commitHash, currentSlot, blockhashAtOrAfter, winningIndex } from "./draw.js";
+import { log } from "./log.js";
+
+/**
+ * Raffles, both kinds:
+ *
+ * PAID  — a sniped card split into N tickets priced at exactly compValue/N
+ *         (zero house edge — the machine's profit was already earned at the
+ *         snipe). FILL-OR-REFUND: resolves only if every ticket sells before
+ *         the deadline; otherwise refunds, card returns to the vault.
+ *
+ * HOLDER — free. Funded by HOLDER_RAFFLE_SHARE of realized profit: when the
+ *         pool can afford a vault card (at comp value), that card is raffled
+ *         to token holders, entries weighted by balance. Holding IS the
+ *         ticket. (Paper mode simulates a holder set.)
+ *
+ * Both use the same commitment: sha256(manifest | seed | resolveSlot) with a
+ *  FUTURE slot named before any ticket exists.
+ */
+
+const SLOTS_PER_HOUR = 9000; // ~2.5 slots/s
+import fs from "node:fs";
+
+function seeds(): Map<string, string> {
+  // secret seeds live outside state.json so the "reveal" actually means something
+  const m = new Map<string, string>();
+  try {
+    for (const line of fs.readFileSync(`${cfg.dataDir}/seeds.txt`, "utf8").split("\n")) {
+      const [id, seed] = line.split(":");
+      if (id && seed) m.set(id, seed.trim());
+    }
+  } catch {}
+  return m;
+}
+function saveSeed(id: string, seed: string): void {
+  fs.appendFileSync(`${cfg.dataDir}/seeds.txt`, `${id}:${seed}\n`);
+}
+
+export async function createPaidRaffle(card: VaultCard): Promise<Raffle> {
+  const tickets = Math.max(cfg.ticketsMin, Math.min(cfg.ticketsMax, Math.round(card.compUsd / 10)));
+  const ticketUsd = +(card.compUsd / tickets).toFixed(2);
+  const slotNow = await currentSlot();
+  const resolveSlot = slotNow + Math.round((cfg.raffleFillHours + 1) * SLOTS_PER_HOUR);
+  const id = crypto.randomBytes(6).toString("hex");
+  const seed = makeSeed();
+  const manifest = JSON.stringify({ id, nft: card.nft, item: card.itemName, tickets, ticketUsd, rule: "resolves only if sold out by deadline; else refund" });
+  const r: Raffle = {
+    id, kind: "paid", nft: card.nft, title: card.itemName,
+    tickets, ticketUsd, sold: [],
+    createdAt: Date.now(),
+    fillDeadline: Date.now() + cfg.raffleFillHours * 3600_000,
+    resolveSlot,
+    commitHash: commitHash(manifest, seed, resolveSlot),
+    status: "open",
+  };
+  saveSeed(id, seed);
+  card.raffleId = id;
+  card.status = "raffled";
+  state.raffles.push(r);
+  save();
+  ledger("raffle-open", { id, kind: "paid", nft: card.nft, item: card.itemName, tickets, ticketUsd, commit: r.commitHash, resolveSlot });
+  log.info("raffle", `OPEN ${id}: ${card.itemName.slice(0, 50)} — ${tickets} x $${ticketUsd} (comp $${card.compUsd})`);
+  return r;
+}
+
+/** Paper ticket purchase. */
+export function buyTickets(raffleId: string, buyer: string, n: number): { ok: boolean; why?: string } {
+  const r = state.raffles.find((x) => x.id === raffleId);
+  if (!r || r.status !== "open" || r.kind !== "paid") return { ok: false, why: "no open paid raffle" };
+  const soldN = r.sold.reduce((s, t) => s + t.n, 0);
+  if (soldN + n > r.tickets) return { ok: false, why: "not enough tickets left" };
+  r.sold.push({ buyer, n, paidUsd: +(n * r.ticketUsd).toFixed(2), at: Date.now() });
+  save();
+  ledger("ticket-buy", { raffle: r.id, buyer, n, paidUsd: +(n * r.ticketUsd).toFixed(2) });
+  return { ok: true };
+}
+
+/** Fill-or-refund + resolution — run on a timer. */
+export async function tickRaffles(): Promise<void> {
+  for (const r of state.raffles.filter((x) => x.status === "open")) {
+    const soldN = r.sold.reduce((s, t) => s + t.n, 0);
+    const card = state.vault.find((v) => v.nft === r.nft);
+
+    if (r.kind === "paid" && soldN < r.tickets && Date.now() > r.fillDeadline) {
+      r.status = "refunded";
+      if (card) { card.status = "vault"; card.raffleId = undefined; }
+      save();
+      ledger("raffle-refund", { raffle: r.id, sold: soldN, of: r.tickets });
+      log.info("raffle", `REFUND ${r.id} — ${soldN}/${r.tickets} sold`);
+      continue;
+    }
+    if (soldN < r.tickets) continue; // still filling
+
+    // sold out (or holder raffle fully entered) — wait for the slot, then draw
+    const slotNow = await currentSlot().catch(() => 0);
+    if (!slotNow || slotNow < r.resolveSlot) continue;
+    const seed = seeds().get(r.id);
+    if (!seed) { log.warn("raffle", `${r.id}: seed missing!`); continue; }
+    try {
+      const { blockhash } = await blockhashAtOrAfter(r.resolveSlot);
+      // flatten tickets into an indexed list: buyer of index i
+      const owners: string[] = [];
+      for (const t of r.sold) for (let i = 0; i < t.n; i++) owners.push(t.buyer);
+      const idx = winningIndex(seed, blockhash, owners.length);
+      r.winner = owners[idx];
+      r.seed = seed;
+      r.blockhash = blockhash;
+      r.status = "resolved";
+      r.resolvedAt = Date.now();
+
+      if (card) card.status = r.kind === "paid" ? "awarded" : "holder_prize";
+      if (r.kind === "paid" && card) {
+        // proceeds return; the SPREAD is realized profit; half funds holder raffles
+        const proceeds = r.tickets * r.ticketUsd;
+        const profit = +(proceeds - card.paidUsd).toFixed(2);
+        state.walletUsd += proceeds;
+        state.realizedProfitUsd += profit;
+        const toPool = +(Math.max(0, profit) * cfg.holderRaffleShare).toFixed(2);
+        state.holderPoolUsd += toPool;
+        state.walletUsd -= toPool;
+        ledger("profit", { raffle: r.id, proceeds, cost: card.paidUsd, profit, toHolderPool: toPool });
+      }
+      save();
+      ledger("raffle-resolve", { raffle: r.id, winner: r.winner, winnerIndex: idx, of: owners.length, blockhash, seedRevealed: seed });
+      log.info("raffle", `RESOLVED ${r.id} — winner ${r.winner} (ticket ${idx + 1}/${owners.length})`);
+    } catch (e) {
+      log.warn("raffle", `${r.id} resolve: ${String(e).slice(0, 100)}`);
+    }
+  }
+}
+
+/** Holder raffle: when the pool affords a vault card, raffle it to holders. */
+export async function tickHolderRaffles(holders: { wallet: string; balance: number }[]): Promise<void> {
+  if (state.raffles.some((r) => r.kind === "holder" && r.status === "open")) return;
+  const candidate = state.vault
+    .filter((v) => v.status === "vault" && v.compUsd <= state.holderPoolUsd)
+    .sort((a, b) => b.compUsd - a.compUsd)[0];
+  if (!candidate || !holders.length) return;
+  const slotNow = await currentSlot();
+  const resolveSlot = slotNow + Math.round(0.5 * SLOTS_PER_HOUR); // ~30 min
+  const id = crypto.randomBytes(6).toString("hex");
+  const seed = makeSeed();
+  // entries weighted by balance — the snapshot IS the manifest
+  const entries = holders.map((h) => ({ wallet: h.wallet, n: Math.max(1, Math.floor(h.balance)) }));
+  const manifest = JSON.stringify({ id, nft: candidate.nft, item: candidate.itemName, snapshot: entries, rule: "free holder raffle, entries = balance" });
+  const total = entries.reduce((s, e) => s + e.n, 0);
+  const r: Raffle = {
+    id, kind: "holder", nft: candidate.nft, title: `HOLDER DROP — ${candidate.itemName}`,
+    tickets: total, ticketUsd: 0,
+    sold: entries.map((e) => ({ buyer: e.wallet, n: e.n, paidUsd: 0, at: Date.now() })),
+    createdAt: Date.now(), fillDeadline: Date.now(), resolveSlot,
+    commitHash: commitHash(manifest, seed, resolveSlot), status: "open",
+  };
+  saveSeed(id, seed);
+  state.holderPoolUsd = +(state.holderPoolUsd - candidate.compUsd).toFixed(2);
+  candidate.raffleId = id;
+  candidate.status = "raffled";
+  state.raffles.push(r);
+  save();
+  ledger("holder-raffle-open", { id, nft: candidate.nft, item: candidate.itemName, entrants: entries.length, entries: total, poolSpent: candidate.compUsd, commit: r.commitHash, resolveSlot });
+  log.info("raffle", `HOLDER DROP ${id}: ${candidate.itemName.slice(0, 50)} to ${entries.length} holders`);
+}
