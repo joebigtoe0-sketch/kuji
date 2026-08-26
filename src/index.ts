@@ -6,6 +6,10 @@ import { state, save, ledgerTail, ledger } from "./store.js";
 import { scan } from "./sniper.js";
 import { createPaidRaffle, buyTickets, tickRaffles, tickHolderRaffles } from "./raffles.js";
 import { verify } from "./draw.js";
+import { mountSite } from "./site.js";
+import { gradeVault } from "./grader.js";
+import { autoRaffle } from "./raffles.js";
+import { simTick, seededHolders } from "./sim.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -17,6 +21,7 @@ import path from "node:path";
 
 const app = express();
 app.use(express.json());
+app.use("/fonts", express.static(path.join(cfg.root, "public", "fonts"), { maxAge: "7d" }));
 
 // ---------- paper holder registry (simulates token holders) ----------
 interface Holder { wallet: string; balance: number }
@@ -85,7 +90,7 @@ app.get("/api/verify/:id", (req, res) => {
     return res.json({ ok: false, why: "not resolved yet", status: r.status, commitHash: r.commitHash, resolveSlot: r.resolveSlot });
   const owners: string[] = [];
   for (const t of r.sold) for (let i = 0; i < t.n; i++) owners.push(t.buyer);
-  const winnerIndex = owners.findIndex((w, i) => w === r.winner && owners.slice(0, i).filter((x) => x === r.winner).length === 0);
+  const winnerIndex = r.winnerIndex ?? -1;
   // recompute from published data only
   const manifest = r.kind === "paid"
     ? JSON.stringify({ id: r.id, nft: r.nft, item: r.title, tickets: r.tickets, ticketUsd: r.ticketUsd, rule: "resolves only if sold out by deadline; else refund" })
@@ -96,26 +101,17 @@ app.get("/api/verify/:id", (req, res) => {
   res.json({ raffle: r.id, status: r.status, commitHash: r.commitHash, seed: r.seed, resolveSlot: r.resolveSlot, blockhash: r.blockhash, winner: r.winner, verified: check });
 });
 
-// ---------- minimal nerd terminal ----------
-app.get("/", (_req, res) => {
-  res.type("html").send(`<!doctype html><meta charset="utf-8"><title>NERDNAME — paper mode</title>
-<style>body{background:#0a0e0a;color:#9ef01a;font:14px/1.5 ui-monospace,monospace;max-width:900px;margin:24px auto;padding:0 12px}
-a{color:#38b000}h1{font-size:18px}pre{background:#101510;padding:12px;border:1px solid #1c2b1c;overflow-x:auto}
-.dim{color:#5a7a4a}</style>
-<h1>NERDNAME <span class="dim">// the card machine — PAPER MODE, nothing is real except the math</span></h1>
-<pre id="s">loading…</pre>
-<p class="dim">endpoints: /api/state · /api/vault · /api/ledger · /api/verify/:id</p>
-<script>
-const load=async()=>{document.getElementById('s').textContent=JSON.stringify(await (await fetch('/api/state')).json(),null,2)};
-load();setInterval(load,10000);
-</script>`);
-});
+// ---------- the site ----------
+mountSite(app);
 
 // ---------- jobs ----------
 setInterval(() => void scan().catch((e) => log.warn("sniper", String(e).slice(0, 100))), cfg.scanEveryMin * 60_000);
 setTimeout(() => void scan().catch((e) => log.warn("sniper", String(e).slice(0, 100))), 3000);
 setInterval(() => void tickRaffles().catch(() => {}), 30_000);
-setInterval(() => void tickHolderRaffles(holders).catch(() => {}), 60_000);
+setInterval(() => void tickHolderRaffles(holders.length ? holders : seededHolders()).catch(() => {}), 60_000);
+setInterval(() => void gradeVault().catch(() => {}), 5 * 60_000);
+setInterval(() => void autoRaffle().catch((e) => log.warn("raffle", String(e).slice(0, 80))), 45_000);
+setInterval(() => { try { simTick(); } catch {} }, cfg.simBuyEverySec * 1000);
 
 app.listen(cfg.port, "127.0.0.1", () => {
   log.info("nerd", `paper machine on http://127.0.0.1:${cfg.port} — budget $${state.walletUsd.toFixed(2)}, vault ${state.vault.length} cards`);

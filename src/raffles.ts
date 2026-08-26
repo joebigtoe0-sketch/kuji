@@ -39,11 +39,29 @@ function saveSeed(id: string, seed: string): void {
   fs.appendFileSync(`${cfg.dataDir}/seeds.txt`, `${id}:${seed}\n`);
 }
 
+const NERD_OPEN = [
+  "manifest is public. odds are math. cope elsewhere.",
+  "i did the pricing so you don't have to trust me. verify it.",
+  "every ticket costs exactly what it's worth. revolutionary, apparently.",
+  "the commit hash is already on file. i can't cheat and neither can you.",
+];
+
+/** Keep MAX_OPEN_RAFFLES paid raffles running from the vault, oldest first. */
+export async function autoRaffle(): Promise<void> {
+  const open = state.raffles.filter((r) => r.kind === "paid" && r.status === "open").length;
+  if (open >= cfg.maxOpenRaffles) return;
+  const card = state.vault
+    .filter((v) => v.status === "vault")
+    .sort((a, b) => a.boughtAt - b.boughtAt)[0];
+  if (!card) return;
+  await createPaidRaffle(card);
+}
+
 export async function createPaidRaffle(card: VaultCard): Promise<Raffle> {
   const tickets = Math.max(cfg.ticketsMin, Math.min(cfg.ticketsMax, Math.round(card.compUsd / 10)));
   const ticketUsd = +(card.compUsd / tickets).toFixed(2);
   const slotNow = await currentSlot();
-  const resolveSlot = slotNow + Math.round((cfg.raffleFillHours + 1) * SLOTS_PER_HOUR);
+  const resolveSlot = slotNow + Math.round((cfg.raffleFillHours + cfg.resolveDelayMin / 60) * SLOTS_PER_HOUR);
   const id = crypto.randomBytes(6).toString("hex");
   const seed = makeSeed();
   const manifest = JSON.stringify({ id, nft: card.nft, item: card.itemName, tickets, ticketUsd, rule: "resolves only if sold out by deadline; else refund" });
@@ -61,7 +79,7 @@ export async function createPaidRaffle(card: VaultCard): Promise<Raffle> {
   card.status = "raffled";
   state.raffles.push(r);
   save();
-  ledger("raffle-open", { id, kind: "paid", nft: card.nft, item: card.itemName, tickets, ticketUsd, commit: r.commitHash, resolveSlot });
+  ledger("raffle-open", { id, kind: "paid", nft: card.nft, item: card.itemName, tickets, ticketUsd, commit: r.commitHash, resolveSlot, note: NERD_OPEN[Math.floor(Math.random() * NERD_OPEN.length)] });
   log.info("raffle", `OPEN ${id}: ${card.itemName.slice(0, 50)} — ${tickets} x $${ticketUsd} (comp $${card.compUsd})`);
   return r;
 }
@@ -106,6 +124,7 @@ export async function tickRaffles(): Promise<void> {
       for (const t of r.sold) for (let i = 0; i < t.n; i++) owners.push(t.buyer);
       const idx = winningIndex(seed, blockhash, owners.length);
       r.winner = owners[idx];
+      r.winnerIndex = idx;
       r.seed = seed;
       r.blockhash = blockhash;
       r.status = "resolved";

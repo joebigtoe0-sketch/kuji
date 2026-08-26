@@ -26,6 +26,16 @@ let index: Record<string, Row[]> = (() => {
   try { return JSON.parse(fs.readFileSync(FILE, "utf8")); } catch { return {}; }
 })();
 
+// flat sightings map: nft -> latest sighting. The grader's ground truth —
+// a listing that stops appearing at our snipe price was TAKEN (validated).
+const SIGHT_FILE = path.join(cfg.dataDir, "sightings.json");
+let sightings: Record<string, { priceUsd: number; lastSeenAt: number }> = (() => {
+  try { return JSON.parse(fs.readFileSync(SIGHT_FILE, "utf8")); } catch { return {}; }
+})();
+export function lastSighting(nft: string): { priceUsd: number; lastSeenAt: number } | null {
+  return sightings[nft] ?? null;
+}
+
 export function ingest(listings: Listing[]): void {
   const cutoff = Date.now() - 7 * 86_400_000;
   for (const l of listings) {
@@ -41,6 +51,10 @@ export function ingest(listings: Listing[]): void {
     else delete index[k];
   }
   fs.writeFileSync(FILE, JSON.stringify(index));
+  for (const l of listings) sightings[l.nft] = { priceUsd: l.priceUsd, lastSeenAt: l.seenAt };
+  const scut = Date.now() - 14 * 86_400_000;
+  for (const [k, v] of Object.entries(sightings)) if (v.lastSeenAt < scut) delete sightings[k];
+  fs.writeFileSync(SIGHT_FILE, JSON.stringify(sightings));
 }
 
 export interface Comp {

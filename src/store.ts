@@ -44,6 +44,7 @@ export interface Raffle {
   seed?: string; // revealed at resolution
   blockhash?: string; // the real chain blockhash used
   winner?: string;
+  winnerIndex?: number; // the drawn ticket index — stored so verification never reconstructs it
   status: "open" | "refunded" | "resolved";
   resolvedAt?: number;
 }

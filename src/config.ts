@@ -36,9 +36,17 @@ export const cfg = {
   categories: str("CATEGORIES", "Pokemon,One Piece,Magic The Gathering,Lorcana,Dragon Ball,Riftbound")
     .split(",").map((s) => s.trim()).filter(Boolean),
 
+  gradeAfterH: num("GRADE_AFTER_H", 24),
+
   // raffles
   ticketsMin: num("TICKETS_MIN", 10),
   ticketsMax: num("TICKETS_MAX", 25),
   raffleFillHours: num("RAFFLE_FILL_HOURS", 48),
   holderRaffleShare: num("HOLDER_RAFFLE_SHARE", 0.5),
+  maxOpenRaffles: num("MAX_OPEN_RAFFLES", 2),
+  resolveDelayMin: num("RESOLVE_DELAY_MIN", 30), // draw slot this long after the fill window
+
+  // local demo: simulated ticket buyers + holders so the lifecycle runs alone
+  simBuyers: (process.env.SIM_BUYERS ?? "true").toLowerCase() === "true",
+  simBuyEverySec: num("SIM_BUY_EVERY_SEC", 45),
 };
