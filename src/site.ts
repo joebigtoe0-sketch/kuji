@@ -46,8 +46,7 @@ padding:0 3.5vw;height:74px;background:#100f0acc;backdrop-filter:blur(4px);borde
 
 /* hero */
 .hero{position:relative;padding:9vh 5vw 7vh;isolation:isolate;overflow:hidden;
-display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:2vw;align-items:center;
-max-width:1420px;margin:0 auto}
+display:grid;grid-template-columns:minmax(0,820px) 430px;justify-content:start;gap:5vw;align-items:center}
 .hero>.copy{min-width:0}
 .hero::before{content:"NO EDGE NO EDGE NO EDGE";position:absolute;top:8%;left:-4vw;font:400 17vw/1 var(--disp);
 color:#e8b62e0d;white-space:nowrap;pointer-events:none;z-index:-1}
@@ -56,7 +55,7 @@ h1 i{font-style:normal;color:transparent;-webkit-text-stroke:2px var(--cream);di
 .deck{font:400 clamp(1.1rem,2vw,1.6rem)/1.35 var(--disp);letter-spacing:.03em;text-transform:uppercase;
 margin:26px 0 8px;max-width:640px}
 .deck em{font-style:normal;color:var(--signal)}
-.herofan{position:relative;width:100%;max-width:430px;height:430px;justify-self:center;pointer-events:none}
+.herofan{position:relative;width:430px;height:430px;pointer-events:none}
 .herofan img{position:absolute;width:64%;border:6px solid #1c1a10;box-shadow:14px 16px #0a0a08cc;background:#181712}
 .herofan img:nth-child(1){left:0;top:36px;transform:rotate(-9deg)}
 .herofan img:nth-child(2){left:24%;top:0;transform:rotate(3deg);z-index:2}
