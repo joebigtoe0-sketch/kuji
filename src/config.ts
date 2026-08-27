@@ -34,7 +34,7 @@ export const cfg = {
   // chain
   rpcUrl: str("RPC_URL", devnet ? "https://api.devnet.solana.com" : "https://api.mainnet-beta.solana.com"),
   usdcMint: str("USDC_MINT", devnet
-    ? "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" // circle devnet USDC
+    ? "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr" // USDC-Dev — what CC devnet actually trades in (mintable by anyone via the spl-token-faucet program)
     : "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
   tokenMint: str("TOKEN_MINT"), // our launched token (holder raffles) — empty until launch
   ansemMint: str("ANSEM_MINT"), // $ANSEM — holder-raffle weight boost + ticket currency
@@ -42,6 +42,7 @@ export const cfg = {
   ansemMinUsd: num("ANSEM_MIN", 10), // min ANSEM (ui amount) to qualify for the boost
   ansemPerUsd: num("ANSEM_PER_USD", 0), // ANSEM accepted for tickets at this rate (0 = USDC only)
   walletSecret: str("WALLET_SECRET"), // base58 or JSON byte array; empty → keypair generated to data/
+  dasUrl: str("DAS_URL"), // DAS-capable RPC (Helius) — required for compressed-NFT ownership/transfers; falls back to RPC_URL if that's Helius
   adminKey: str("ADMIN_KEY"), // guards /api/admin/* in live mode
 
   // live guardrails (on top of the paper-era sniper guardrails)

@@ -7,6 +7,7 @@ import {
 } from "@solana/spl-token";
 import { cfg } from "./config.js";
 import { connection, sendTx, walletPk } from "./wallet.js";
+import { transferAsset } from "./assets.js";
 import { ledger } from "./store.js";
 import { log } from "./log.js";
 import { halted } from "./halt.js";
@@ -63,16 +64,9 @@ async function sendUsdc(to: string, amountUsd: number, label: string): Promise<s
   ], label);
 }
 
-async function sendNft(to: string, nftMint: string, label: string): Promise<string> {
-  const mint = new PublicKey(nftMint);
-  const dest = new PublicKey(to);
-  const from = getAssociatedTokenAddressSync(mint, walletPk, true);
-  const destAta = getAssociatedTokenAddressSync(mint, dest, true);
-  return sendTx([
-    createAssociatedTokenAccountIdempotentInstruction(walletPk, destAta, dest, mint),
-    createTransferCheckedInstruction(from, mint, destAta, walletPk, 1n, 0),
-  ], label);
-}
+// prize transfers dispatch on the asset standard (spl / core / cnft) —
+// CC cards come in all three; see assets.ts
+const sendNft = (to: string, nft: string, _label: string) => transferAsset(nft, to);
 
 /** Work the queue — on a timer. One payout per tick keeps failure blast radius small. */
 export async function tickPayouts(): Promise<void> {

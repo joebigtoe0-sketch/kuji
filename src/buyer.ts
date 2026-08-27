@@ -1,7 +1,8 @@
 import { cfg } from "./config.js";
 import type { Listing } from "./cc.js";
-import { signAndSendBase64, ownsNft, usdcBalance } from "./wallet.js";
+import { signAndSendBase64, usdcBalance } from "./wallet.js";
 import { walletPk } from "./wallet.js";
+import { ownsAsset } from "./assets.js";
 import { ledger } from "./store.js";
 import { log } from "./log.js";
 import { halted } from "./halt.js";
@@ -59,7 +60,7 @@ export async function realBuy(l: Listing): Promise<BuyResult> {
   // ownership check — the tx confirmed, but trust nothing: poll until the
   // NFT actually sits in our wallet (or give up loudly and flag for review)
   for (let i = 0; i < 10; i++) {
-    if (await ownsNft(l.nft)) {
+    if (await ownsAsset(l.nft)) {
       ledger("live-buy", { nft: l.nft, item: l.itemName, price: l.priceUsd, sig });
       log.info("buyer", `LIVE BUY confirmed + owned: ${l.itemName.slice(0, 50)} @ $${l.priceUsd} (${sig})`);
       return { ok: true, sig };
