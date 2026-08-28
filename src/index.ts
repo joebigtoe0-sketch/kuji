@@ -165,6 +165,17 @@ app.get("/api/admin/status", async (req, res) => {
       .map((v) => ({ nft: v.nft, item: v.itemName, paid: v.paidUsd, comp: v.compUsd })),
   });
 });
+/** Accept "@kuji", "kuji", "x.com/kuji" or a full URL — store a real link.
+ *  A half-typed handle would otherwise render a dead button on a live site. */
+function normalizeX(input: string): string {
+  const v = input.trim().replace(/^@/, "");
+  if (!v) return "";
+  if (/^https?:\/\//i.test(v)) return v;
+  if (/^(x\.com|twitter\.com)\//i.test(v)) return `https://${v}`;
+  if (/^[A-Za-z0-9_]{1,15}$/.test(v)) return `https://x.com/${v}`;
+  return v.startsWith("http") ? v : `https://${v}`;
+}
+
 // runtime settings: token CA, X link, and THE LIVE TOGGLE — flipping live
 // starts real mainnet operation (sniper buys with real USDC) immediately
 app.post("/api/admin/settings", (req, res) => {
@@ -172,7 +183,7 @@ app.post("/api/admin/settings", (req, res) => {
   const wasLive = cfg.live;
   const patch: Record<string, unknown> = {};
   if (typeof req.body?.tokenMint === "string") patch.tokenMint = req.body.tokenMint.trim();
-  if (typeof req.body?.xUrl === "string") patch.xUrl = req.body.xUrl.trim();
+  if (typeof req.body?.xUrl === "string") patch.xUrl = normalizeX(req.body.xUrl);
   if (typeof req.body?.live === "boolean") patch.live = req.body.live;
   if (typeof req.body?.bootstrap === "boolean") patch.bootstrap = req.body.bootstrap;
   const now = setRuntime(patch);

@@ -763,8 +763,9 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
       <h3>SETTINGS</h3>
       <p class="dim" style="font-size:12px;margin-bottom:6px">token contract address (shows in the hero with click-to-copy)</p>
       <input id="ca" placeholder="token CA (mint address)" style="width:100%;padding:10px 12px;border-radius:10px;border:2px solid var(--edge);background:#0d1016;color:var(--cream);font:700 13px var(--mono)">
-      <p class="dim" style="font-size:12px;margin:12px 0 6px">X profile URL (header + footer link)</p>
-      <input id="xu" placeholder="https://x.com/…" style="width:100%;padding:10px 12px;border-radius:10px;border:2px solid var(--edge);background:#0d1016;color:var(--cream);font:700 13px var(--mono)">
+      <p class="dim" style="font-size:12px;margin:12px 0 6px">X profile — handle or full URL. The header and footer
+      buttons stay hidden until this is set.</p>
+      <input id="xu" placeholder="@kuji  or  https://x.com/kuji" style="width:100%;padding:10px 12px;border-radius:10px;border:2px solid var(--edge);background:#0d1016;color:var(--cream);font:700 13px var(--mono)">
       <button class="cta" id="saveset" style="margin-top:14px;padding:10px 20px"><b>SAVE SETTINGS</b></button>
     </div>
     <div class="receipts">
