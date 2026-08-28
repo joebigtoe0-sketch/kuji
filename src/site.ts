@@ -713,6 +713,7 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
       <tr><td>prize table committed</td><td>${m.commitHash}</td></tr>
       ${m.commitSig ? `<tr><td>commit anchored on-chain</td><td><a style="color:var(--signal)" href="https://solscan.io/tx/${m.commitSig}${cfg.devnet ? "?cluster=devnet" : ""}">${m.commitSig}</a></td></tr>` : ""}
       <tr><td>per-open draw</td><td>sha256(machineId | your tx signature | blockhash of your confirmation slot) over the remaining pool — you fix your signature before that blockhash exists; we control neither</td></tr>
+      <tr><td>getting paid</td><td>automatic. Cash prizes are sent as USDC to the wallet you paid from, and cards are transferred to it — there is nothing to claim. Small wins to the same wallet are combined into one payment.</td></tr>
       <tr><td>the price rule</td><td>a capsule costs (value still in the rack) ÷ (capsules still in the rack), recomputed at every open — so every capsule is a fair bet at the moment you buy it, and there is no good or bad time to play</td></tr>
       <tr><td>the machine ends</td><td>only when the rack is empty — no prize closes it early</td></tr>
       <tr><td>recompute every open</td><td><a style="color:var(--signal)" href="/api/verify-machine/${m.id}">/api/verify-machine/${m.id}</a></td></tr>
@@ -756,7 +757,9 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
   function reveal(prizes,spent){
     const d=document.createElement('div'); d.className='reveal';
     d.innerHTML='<div class="rc"><span>the capsule holds</span><b>'+prizes.map(p=>p.label).join('<br>')+'</b>'+
-      '<span>paid $'+(spent||0).toFixed(2)+' · worth $'+prizes.reduce((s,p)=>s+p.valueUsd,0).toFixed(2)+'</span></div>';
+      '<span>paid $'+(spent||0).toFixed(2)+' · worth $'+prizes.reduce((s,p)=>s+p.valueUsd,0).toFixed(2)+
+      (prizes.some(p=>p.kind==='cash')?'<br>cash is sent to your wallet automatically':'')+
+      (prizes.some(p=>p.kind==='card')?'<br>the card is transferred to your wallet':'')+'</span></div>';
     d.onclick=()=>location.reload();
     document.body.appendChild(d);
     setTimeout(()=>location.reload(), 6000);

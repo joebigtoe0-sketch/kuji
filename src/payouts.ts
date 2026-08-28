@@ -86,11 +86,26 @@ async function isProgramOwned(addr: string): Promise<boolean> {
   }
 }
 
-/** Work the queue — on a timer. One payout per tick keeps failure blast radius small. */
+/**
+ * Work the queue — on a timer.
+ *
+ * USDC owed to the SAME wallet is combined into one transfer. Capsule
+ * prizes are mostly small change (a $1 capsule machine is full of sub-$1
+ * envelopes), so opening three capsules used to mean three separate
+ * transactions over a minute — and if that wallet has no USDC account yet,
+ * WE pay the ~0.002 SOL rent to create one. Paying 16c three times to a
+ * new wallet could cost more in rent than the prizes are worth. Coalescing
+ * means one account creation, one transfer, one line in their wallet.
+ */
 export async function tickPayouts(): Promise<void> {
   if (!cfg.live || halted()) return;
   const p = q.find((x) => x.status === "queued");
   if (!p) return;
+  // everything else queued for this wallet in the same currency rides along
+  const batch = p.kind === "usdc"
+    ? q.filter((x) => x.status === "queued" && x.kind === "usdc" && x.to === p.to)
+    : [p];
+  const batchUsd = +batch.reduce((s, x) => s + (x.amountUsd ?? 0), 0).toFixed(6);
   if (await isProgramOwned(p.to)) {
     p.status = "stuck";
     ledger("payout-BLOCKED", { kind: p.kind, to: p.to, amountUsd: p.amountUsd, nft: p.nft, raffle: p.raffleId, why: "recipient is a program-owned address (bonding curve / pool / PDA) — sending there would destroy the prize" });
@@ -99,11 +114,11 @@ export async function tickPayouts(): Promise<void> {
     return;
   }
   try {
-    p.sig = p.kind === "usdc"
-      ? await sendUsdc(p.to, p.amountUsd!, `refund $${p.amountUsd} → ${p.to.slice(0, 8)} (${p.reason})`)
+    const sig = p.kind === "usdc"
+      ? await sendUsdc(p.to, batchUsd, `pay $${batchUsd} → ${p.to.slice(0, 8)}${batch.length > 1 ? ` (${batch.length} items)` : ""} (${p.reason})`)
       : await sendNft(p.to, p.nft!, `prize ${p.nft!.slice(0, 8)} → ${p.to.slice(0, 8)} (${p.reason})`);
-    p.status = "done";
-    ledger("payout-sent", { kind: p.kind, to: p.to, amountUsd: p.amountUsd, nft: p.nft, raffle: p.raffleId, sig: p.sig });
+    for (const x of batch) { x.sig = sig; x.status = "done"; }
+    ledger("payout-sent", { kind: p.kind, to: p.to, amountUsd: p.kind === "usdc" ? batchUsd : undefined, items: batch.length, nft: p.nft, raffle: p.raffleId, sig });
   } catch (e) {
     p.tries++;
     const why = String(e).slice(0, 140);
