@@ -821,11 +821,7 @@ $('saveset').onclick=async()=>{
 };
 $('livebtn').onclick=async()=>{
   const goingLive=!st.live;
-  if(goingLive&&!confirm('GO LIVE?
-
-The machine starts spending REAL USDC from wallet
-'+st.wallet+'
-from this moment. Sure?'))return;
+  if(goingLive&&!confirm('GO LIVE?\\n\\nThe machine starts spending REAL USDC from wallet\\n'+st.wallet+'\\nfrom this moment. Sure?'))return;
   await fetch('/api/admin/settings',{method:'POST',headers:hdr(),body:JSON.stringify({live:goingLive})});
   $('lmsg').textContent=goingLive?'MACHINE IS LIVE':'back to paper';refresh();
 };
