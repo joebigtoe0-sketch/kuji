@@ -5,6 +5,7 @@ import { gradeStats, grades } from "./grader.js";
 import { indexStats } from "./comps.js";
 import { marketFor } from "./market.js";
 import { capsulePrice, remainingPrizes } from "./capsules.js";
+import { brand } from "./brand.js";
 
 /**
  * The machine's storefront — TCG identity: Pokemon-logo type treatment
@@ -52,9 +53,11 @@ animation:grain .3s steps(2,end) infinite}
 .hd{position:sticky;top:0;z-index:50;display:flex;justify-content:space-between;align-items:center;
 padding:0 3.5vw;height:76px;background:#03060fd9;backdrop-filter:blur(10px);border-bottom:2px solid #6fe0ff44;
 box-shadow:0 8px 30px #6fe0ff1a}
-.wordmark{font:400 2.1rem var(--disp);color:var(--signal);-webkit-text-stroke:1.6px #04283d;letter-spacing:.03em;
+.wordmark{display:flex;align-items:center;gap:10px;font:400 2.1rem var(--disp);color:var(--signal);-webkit-text-stroke:1.6px #04283d;letter-spacing:.03em;
 text-shadow:0 0 22px #2ee6c877}
 .wordmark b{color:var(--signal);font-weight:400}
+.wordmark .wmimg{height:42px;width:auto;display:block}
+.wordmark .wmark{height:38px;width:38px;object-fit:contain;display:block}
 .hd nav{display:flex;gap:26px;font:800 13px var(--lab);letter-spacing:.14em;text-transform:uppercase}
 .hd nav a{padding:6px 2px;border-bottom:3px solid transparent}
 .hd nav a:hover{color:var(--signal);border-bottom-color:var(--signal)}
@@ -280,11 +283,23 @@ const ago = (t: number) => {
 };
 
 function shell(title: string, body: string, ticker?: string): string {
+  const b = brand();
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>KUJI — ${title}</title><style>${CSS}</style></head><body>
+<title>KUJI — ${title}</title>
+<meta name="description" content="A machine that buys underpriced graded cards and hands them back at exactly what they are worth. No house edge.">
+<meta name="theme-color" content="#03060f">
+${b.logo ? `<link rel="icon" href="${b.logo}"><link rel="apple-touch-icon" href="${b.logo}">` : ""}
+<meta property="og:title" content="KUJI — the zero-edge capsule machine">
+<meta property="og:description" content="Every capsule costs exactly what the rack is worth. Provably fair, no house edge.">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="${b.og ? "summary_large_image" : "summary"}">
+${b.og ? `<meta property="og:image" content="${b.og}"><meta name="twitter:image" content="${b.og}">` : ""}
+<style>${CSS}</style></head><body>
 <div class="noise"></div>
 <header class="hd">
-  <a class="wordmark" href="/">KU<b>JI</b></a>
+  <a class="wordmark" href="/">${b.wordmark
+    ? `<img class="wmimg" src="${b.wordmark}" alt="KUJI">`
+    : `${b.logo ? `<img class="wmark" src="${b.logo}" alt="">` : ""}KU<b>JI</b>`}</a>
   <nav>${(() => { const m = state.machines.find((x) => x.status === "open"); return m ? `<a href="/machine/${m.id}" style="color:var(--signal)">Candy Machine</a>` : ""; })()}<a href="/raffles">Raffles</a><a href="/vault">The Vault</a><a href="/grades">Receipts</a><a href="/feed">Live Feed</a></nav>
   <div style="display:flex;gap:14px;align-items:center">
     ${cfg.xUrl ? `<a class="xlink" href="${cfg.xUrl}" target="_blank" rel="noopener" aria-label="X">𝕏</a>` : ""}

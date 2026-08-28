@@ -29,6 +29,7 @@ import path from "node:path";
 const app = express();
 app.use(express.json());
 app.use("/fonts", express.static(path.join(cfg.root, "public", "fonts"), { maxAge: "7d" }));
+app.use("/img", express.static(path.join(cfg.root, "public", "img"), { maxAge: "1h" }));
 
 // ---------- paper holder registry (simulates token holders) ----------
 interface Holder { wallet: string; balance: number }
