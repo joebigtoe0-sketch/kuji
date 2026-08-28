@@ -11,8 +11,8 @@ import { gradeVault } from "./grader.js";
 import { autoRaffle } from "./raffles.js";
 import { simTick, seededHolders } from "./sim.js";
 import { buildPayTx, buildCapsulePayTx, buildMarketPayTx, watchPayments } from "./payments.js";
-import { autoMachine, openCapsules, verifyMachine, capsulePrice, quote } from "./capsules.js";
-import { listTickets, cancelListing, fillListing, marketFor, tickMarket } from "./market.js";
+import { autoMachine, openCapsules, verifyMachine, capsulePrice, quote, previewMachine, createMachine } from "./capsules.js";
+import { listTickets, cancelListing, fillListing, marketFor, tickMarket, verifyOwner, listMessage, cancelMessage } from "./market.js";
 import { tickPayouts, pendingPayouts, stuckPayouts, queuePayout } from "./payouts.js";
 import { snapshotHolders, holderReport } from "./holders.js";
 import { halted, setHalt } from "./halt.js";
@@ -134,9 +134,34 @@ app.get("/api/machine/:id/price", (req, res) => {
   });
 });
 app.post("/api/market/list", (req, res) => {
-  res.json(listTickets(String(req.body?.raffle ?? ""), String(req.body?.seller ?? ""), Number(req.body?.n) || 0, Number(req.body?.price) || 0));
+  const raffle = String(req.body?.raffle ?? ""), seller = String(req.body?.seller ?? "");
+  const n = Number(req.body?.n) || 0, price = Number(req.body?.price) || 0;
+  // live money: only the wallet that HOLDS the tickets may offer them
+  if (cfg.live) {
+    const ts = Number(req.body?.ts) || 0;
+    const chk = verifyOwner(seller, listMessage(raffle, n, price, ts), String(req.body?.sig ?? ""));
+    if (!chk.ok) return res.json({ ok: false, why: chk.why });
+  }
+  res.json(listTickets(raffle, seller, n, price));
 });
-app.post("/api/market/:id/cancel", (req, res) => res.json(cancelListing(req.params.id, String(req.body?.seller ?? ""))));
+app.post("/api/market/:id/cancel", (req, res) => {
+  const seller = String(req.body?.seller ?? "");
+  if (cfg.live) {
+    const chk = verifyOwner(seller, cancelMessage(req.params.id, Number(req.body?.ts) || 0), String(req.body?.sig ?? ""));
+    if (!chk.ok) return res.json({ ok: false, why: chk.why });
+  }
+  res.json(cancelListing(req.params.id, seller));
+});
+/** How many tickets does a wallet hold in a raffle? (drives the sell widget) */
+app.get("/api/market/:raffleId/mine", (req, res) => {
+  const r = state.raffles.find((x) => x.id === req.params.raffleId);
+  const w = String(req.query.wallet ?? "");
+  if (!r || !w) return res.json({ ok: false, held: 0, listed: 0 });
+  const held = r.sold.filter((t) => t.buyer === w).reduce((s, t) => s + t.n, 0);
+  const listed = state.market.filter((l) => l.raffleId === r.id && l.seller === w && l.status === "open")
+    .reduce((s, l) => s + l.n, 0);
+  res.json({ ok: true, held, listed, sellable: Math.max(0, held - listed), ticketUsd: r.ticketUsd });
+});
 app.post("/api/market/:id/buy", (req, res) => {
   if (cfg.live) return res.json({ ok: false, why: "live mode fills via /api/paytx?kind=market" });
   res.json(fillListing(req.params.id, String(req.body?.buyer ?? ("anon-" + crypto.randomBytes(3).toString("hex")))));
@@ -304,6 +329,31 @@ app.post("/api/admin/import-card", async (req, res) => {
   ledger("card-imported", { nft, item: card.itemName, paidUsd, compUsd, standard: kind });
   log.info("admin", `imported ${card.itemName.slice(0, 44)} (${kind}) — comp $${compUsd}`);
   res.json({ ok: true, card });
+});
+
+/** What would a machine from these cards look like? Builds nothing. */
+app.get("/api/admin/machine-preview", (req, res) => {
+  if (!admin(req)) return res.status(403).json({ ok: false });
+  const nfts = String(req.query.nfts ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  const cards = state.vault.filter((v) => nfts.includes(v.nft) && v.status === "vault");
+  res.json({ picked: cards.length, ...previewMachine(cards, Number(req.query.share) || undefined) });
+});
+
+/** Build a capsule machine from chosen vault cards. */
+app.post("/api/admin/machine", async (req, res) => {
+  if (!admin(req)) return res.status(403).json({ ok: false });
+  if (state.machines.some((m) => m.status === "open")) return res.json({ ok: false, why: "a machine is already running — let it sell out first" });
+  const nfts: string[] = Array.isArray(req.body?.nfts) ? req.body.nfts.map(String) : [];
+  const cards = state.vault.filter((v) => nfts.includes(v.nft) && v.status === "vault");
+  if (!cards.length) return res.json({ ok: false, why: "none of those cards are sitting in the vault" });
+  const share = Number(req.body?.share) || undefined;
+  try {
+    const m = await createMachine(cards, share);
+    if (!m) return res.json({ ok: false, why: "could not build a valid prize table from those cards (see the log)" });
+    res.json({ ok: true, id: m.id, capsules: m.capsules, startPriceUsd: m.priceUsd, cards: cards.length });
+  } catch (e) {
+    res.json({ ok: false, why: String(e).slice(0, 160) });
+  }
 });
 
 /** Run a FREE holder raffle on a specific vault card, funded by nobody. */

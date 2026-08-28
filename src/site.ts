@@ -329,6 +329,14 @@ ${body}
   ${cfg.xUrl ? `<a class="xfoot" href="${cfg.xUrl}" target="_blank" rel="noopener">𝕏 · FOLLOW THE MACHINE</a>` : ""}
 </footer>
 <script>
+window.__b58=function(bytes){
+  const A='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const d=[]; let s='';
+  for(const b of bytes){let c=b; for(let j=0;j<d.length;j++){c+=d[j]<<8; d[j]=c%58; c=(c/58)|0;} while(c){d.push(c%58); c=(c/58)|0;}}
+  for(const b of bytes){ if(b===0) s+='1'; else break; }
+  for(let i=d.length-1;i>=0;i--) s+=A[d[i]];
+  return s;
+};
 setTimeout(()=>location.reload(), 45000);
 document.querySelectorAll('.capill[data-ca]').forEach(el=>{
   el.onclick=async()=>{
@@ -545,6 +553,20 @@ ${done.length ? `<section>
           <td><button class="buy mktbuy" data-l="${l.id}" data-usd="${(l.n * l.priceUsd).toFixed(2)}">BUY ${usd(l.n * l.priceUsd)}</button></td></tr>`).join("");
         return `<div class="mkt">
           <h4>TICKET MARKET</h4>
+          <div id="sellbox" style="border-bottom:1px solid #1a1b3f22;padding-bottom:12px;margin-bottom:10px">
+            <button class="buy" id="sellconnect">SELL MY TICKETS</button>
+            <span id="sellinfo" style="font:700 12px var(--lab);margin-left:8px;opacity:.7"></span>
+            <div id="sellform" style="display:none;margin-top:10px">
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <input id="sn" type="number" min="1" value="1" style="width:70px;padding:7px 9px;border:2px solid #1a1b3f;border-radius:8px;font:700 13px var(--mono)">
+                <span style="font:700 11px var(--lab)">TICKETS AT</span>
+                <input id="sp" type="number" step="0.01" placeholder="${r.ticketUsd}" style="width:90px;padding:7px 9px;border:2px solid #1a1b3f;border-radius:8px;font:700 13px var(--mono)">
+                <span style="font:700 11px var(--lab)">EACH</span>
+                <button class="buy" id="dolist">LIST</button>
+              </div>
+              <p id="sellmsg" style="font-size:12px;margin-top:8px;opacity:.75"></p>
+            </div>
+          </div>
           <p class="imp">${mkt.lastPriceUsd ? `last trade ${usd(mkt.lastPriceUsd)}/tix — the market prices this card at ~$${mkt.impliedCardUsd}` : "no trades yet — tickets trade freely until the draw"}</p>
           ${rows ? `<table>${rows}</table>` : `<p class="dim" style="font-size:12px">no open listings — holders are holding</p>`}
         </div>`;
@@ -571,6 +593,43 @@ ${done.length ? `<section>
 const cd=document.getElementById('cd');
 if(cd){const t=+cd.dataset.t;const f=()=>{const s=Math.max(0,(t-Date.now())/1000|0);
 cd.textContent=s>3600?((s/3600)|0)+'h '+(((s%3600)/60)|0)+'m':((s/60)|0)+'m '+(s%60|0)+'s';};f();setInterval(f,1000)}
+(function(){
+  const btn=document.getElementById('sellconnect'); if(!btn) return;
+  const info=document.getElementById('sellinfo'), form=document.getElementById('sellform'), msg=document.getElementById('sellmsg');
+  let me=null;
+  btn.onclick=async()=>{
+    try{
+      const ph=window.phantom?.solana||window.solana;
+      if(!ph){info.textContent='phantom not found';return;}
+      await ph.connect(); me=ph.publicKey.toBase58();
+      const j=await (await fetch('/api/market/${r.id}/mine?wallet='+me)).json();
+      if(!j.sellable){info.textContent='this wallet holds '+(j.held||0)+' ticket(s), '+(j.listed||0)+' already listed';return;}
+      info.textContent=me.slice(0,4)+'…'+me.slice(-4)+' holds '+j.sellable+' sellable';
+      document.getElementById('sn').max=j.sellable;
+      document.getElementById('sn').value=Math.min(1,j.sellable)||1;
+      form.style.display='block';
+    }catch(e){info.textContent=String(e.message||e).slice(0,70);}
+  };
+  document.getElementById('dolist').onclick=async()=>{
+    try{
+      const ph=window.phantom?.solana||window.solana;
+      const n=Number(document.getElementById('sn').value)||1;
+      const price=Number(document.getElementById('sp').value)||0;
+      if(price<=0){msg.textContent='set a price';return;}
+      const ts=Date.now();
+      // the wallet signs exactly what it is authorising — the server will
+      // not take our word for who we are
+      const message='KUJI:LIST:${r.id}:'+n+':'+price+':'+ts;
+      msg.textContent='sign to prove the tickets are yours…';
+      const signed=await ph.signMessage(new TextEncoder().encode(message),'utf8');
+      const sigB58=window.__b58(signed.signature);
+      const j=await (await fetch('/api/market/list',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({raffle:'${r.id}',seller:me,n,price,ts,sig:sigB58})})).json();
+      msg.textContent=j.ok?'listed — refreshing…':j.why;
+      if(j.ok) setTimeout(()=>location.reload(),1200);
+    }catch(e){msg.textContent=String(e.message||e).slice(0,90);}
+  };
+})();
 document.querySelectorAll('.mktbuy').forEach(b=>{
   b.onclick=async()=>{
     ${cfg.live ? `
@@ -845,6 +904,21 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
     </div>
 
     <div class="receipts">
+      <h3>BUILD A CAPSULE MACHINE</h3>
+      <p style="font-size:13px;margin-bottom:10px">Tick the cards to put in the rack. The machine fills the rest
+      with cash envelopes so the rack is worth exactly what the capsules cost. It builds itself once
+      ${cfg.minCardsPerMachine} cards are in the vault; use this to start one sooner.</p>
+      <div id="machlist"></div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap">
+        <label style="font:800 11px var(--lab);letter-spacing:.1em;text-transform:uppercase;opacity:.75">biggest card may be</label>
+        <input id="mshare" value="${Math.round(cfg.maxCardShare * 100)}" style="width:70px;padding:8px 10px;border-radius:10px;border:2px solid var(--edge);background:#0d1016;color:var(--cream);font:700 13px var(--mono)">
+        <span style="font:800 11px var(--lab);opacity:.75">% OF THE RACK</span>
+      </div>
+      <p id="mprev" class="dim" style="margin-top:10px;font-size:13px"></p>
+      <button class="cta" id="buildmach" style="margin-top:4px;padding:10px 20px"><b>BUILD MACHINE</b></button>
+    </div>
+
+    <div class="receipts">
       <h3>FREE HOLDER RAFFLE</h3>
       <p style="font-size:13px;margin-bottom:10px">Give a vault card away to token holders, weighted by
       balance. Costs the profit pool nothing — use this for cards you supplied yourself.</p>
@@ -902,6 +976,14 @@ async function refresh(){
         '<td style="padding:6px 4px;opacity:.6">$'+c.paid+' → $'+c.comp+'</td>'+
         '<td style="padding:6px 4px;text-align:right"><button class="hr" data-nft="'+c.nft+'" style="cursor:pointer;background:var(--signal);color:#04101f;border:0;border-radius:999px;padding:6px 12px;font:900 10px var(--lab);letter-spacing:.1em">RAFFLE FREE</button></td></tr>').join('')+'</table>'
     : '<p class="dim" style="font-size:13px">vault is empty</p>';
+  $('machlist').innerHTML=(st.vaultCards||[]).length
+    ? (st.vaultCards||[]).map(c=>'<label style="display:flex;gap:8px;align-items:center;padding:5px 0;font-size:13px">'+
+        '<input type="checkbox" class="mc" value="'+c.nft+'"> <span style="flex:1">'+c.item.slice(0,44)+'</span>'+
+        '<span style="opacity:.6">$'+c.paid+' → $'+c.comp+'</span></label>').join('')
+    : '<p class="dim" style="font-size:13px">vault is empty — nothing to rack yet</p>';
+  document.querySelectorAll('.mc').forEach(c=>c.onchange=mprev);
+  $('mshare').oninput=mprev;
+  mprev();
   document.querySelectorAll('.hr').forEach(b=>{b.onclick=async()=>{
     if(!confirm('Give this card away free to token holders?'))return;
     b.textContent='…';
@@ -923,6 +1005,27 @@ $('livebtn').onclick=async()=>{
   if(goingLive&&!confirm('GO LIVE?\\n\\nThe machine starts spending REAL USDC from wallet\\n'+st.wallet+'\\nfrom this moment. Sure?'))return;
   await fetch('/api/admin/settings',{method:'POST',headers:hdr(),body:JSON.stringify({live:goingLive})});
   $('lmsg').textContent=goingLive?'MACHINE IS LIVE':'back to paper';refresh();
+};
+function picked(){return [...document.querySelectorAll('.mc:checked')].map(c=>c.value);}
+async function mprev(){
+  const n=picked();
+  if(!n.length){$('mprev').textContent='pick at least one card';return;}
+  const share=(Number($('mshare').value)||8)/100;
+  const j=await (await fetch('/api/admin/machine-preview?share='+share+'&nfts='+n.join(','),{headers:hdr()})).json();
+  $('mprev').textContent = j.ok
+    ? j.capsules+' capsules starting at $'+j.startPriceUsd+' each · '+j.cardCount+' card(s) worth $'+j.cardValueUsd+
+      ' + '+j.cashCount+' cash envelopes · biggest card is '+j.chaseSharePct+'% of the rack'+
+      (j.chaseSharePct>15?'  ⚠ concentrated: expect a big swing on this one machine':'')
+    : j.why;
+}
+$('buildmach').onclick=async()=>{
+  const n=picked();
+  if(!n.length){$('mprev').textContent='pick at least one card';return;}
+  if(!confirm('Build a capsule machine from '+n.length+' card(s)? The cards leave the vault and go into the rack.'))return;
+  const share=(Number($('mshare').value)||8)/100;
+  const j=await (await fetch('/api/admin/machine',{method:'POST',headers:hdr(),body:JSON.stringify({nfts:n,share})})).json();
+  $('mprev').textContent=j.ok?('machine '+j.id+' open — '+j.capsules+' capsules at $'+j.startPriceUsd):j.why;
+  refresh();
 };
 $('chkholders').onclick=async()=>{
   $('hmsg').textContent='reading the chain…';

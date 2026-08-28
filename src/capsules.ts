@@ -155,7 +155,37 @@ export async function autoMachine(): Promise<void> {
   await createMachine(eligible.slice(0, cfg.cardsPerMachine));
 }
 
-export async function createMachine(basket: VaultCard[]): Promise<Machine | null> {
+/**
+ * What a machine built from these cards would look like, without building
+ * it. The chase share is the number that matters: it is what drives the
+ * per-machine swing (see the header), so an operator should see it before
+ * committing, not after.
+ */
+export function previewMachine(basket: VaultCard[], shareOverride?: number): {
+  ok: boolean; why?: string; capsules?: number; startPriceUsd?: number;
+  chaseUsd?: number; chaseSharePct?: number; cardCount?: number; cashCount?: number; cardValueUsd?: number;
+} {
+  if (!basket.length) return { ok: false, why: "pick at least one card" };
+  const suspect = basket.filter(suspectComp);
+  if (suspect.length) return { ok: false, why: `${suspect.length} card(s) have suspect comps — re-price them first` };
+  const share = shareOverride && shareOverride > 0 ? Math.min(1, shareOverride) : cfg.maxCardShare;
+  const priceUsd = cfg.capsuleUsd;
+  const cards = [...basket].sort((a, b) => b.compUsd - a.compUsd);
+  const cardValue = cards.reduce((t, c) => t + c.compUsd, 0);
+  const capsules = Math.max(
+    cards.length + 2,
+    Math.ceil(cards[0].compUsd / (priceUsd * share)),
+    Math.ceil((cardValue + state.rolloverUsd) / priceUsd),
+  );
+  const rack = capsules * priceUsd + state.rolloverUsd;
+  return {
+    ok: true, capsules, startPriceUsd: +(rack / capsules).toFixed(2),
+    chaseUsd: cards[0].compUsd, chaseSharePct: +(100 * cards[0].compUsd / rack).toFixed(1),
+    cardCount: cards.length, cashCount: capsules - cards.length, cardValueUsd: +cardValue.toFixed(2),
+  };
+}
+
+export async function createMachine(basket: VaultCard[], shareOverride?: number): Promise<Machine | null> {
   if (!basket.length) return null;
   // THE RULE, enforced here and not only at the caller: a card whose edge
   // is too good to be true never sets a rack price. The rack price IS the
@@ -174,9 +204,10 @@ export async function createMachine(basket: VaultCard[]): Promise<Machine | null
   const cardsValue = cards.reduce((s, c) => s + c.compUsd, 0);
   // size the machine so no single card exceeds maxCardShare of the pool —
   // that share is what drives per-machine variance (see header)
+  const share = shareOverride && shareOverride > 0 ? Math.min(1, shareOverride) : cfg.maxCardShare;
   const capsules = Math.max(
     cards.length + 2,
-    Math.ceil(chase.compUsd / (priceUsd * cfg.maxCardShare)),
+    Math.ceil(chase.compUsd / (priceUsd * share)),
     Math.ceil((cardsValue + rolledIn) / priceUsd),
   );
   const prizes = buildPrizes(cards, capsules, priceUsd, rolledIn);

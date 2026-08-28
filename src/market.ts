@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import nacl from "tweetnacl";
+import bs58 from "bs58";
+import { PublicKey } from "@solana/web3.js";
 import { cfg } from "./config.js";
 import { state, save, ledger, type TicketListing } from "./store.js";
 import { queuePayout } from "./payouts.js";
@@ -19,6 +22,36 @@ import { log } from "./log.js";
  * Ownership snapshots for the draw always come from r.sold at resolve
  * time, so trades before the draw simply move the entries.
  */
+
+/**
+ * Prove the caller controls the wallet they claim to be.
+ *
+ * Listing used to trust a `seller` string. Anyone could therefore list
+ * SOMEBODY ELSE'S tickets at a cent and buy them — the victim would be
+ * paid a cent for tickets they never offered. So a listing (and a cancel)
+ * now requires a signature from that wallet over a message naming exactly
+ * what is being authorised, with a timestamp so it cannot be replayed.
+ */
+export function verifyOwner(wallet: string, message: string, signatureB58: string, maxAgeMs = 10 * 60_000): { ok: boolean; why?: string } {
+  const m = message.match(/:(\d{10,})$/);
+  if (!m) return { ok: false, why: "message must end with a timestamp" };
+  const age = Date.now() - Number(m[1]);
+  if (age > maxAgeMs || age < -60_000) return { ok: false, why: "signature expired — try again" };
+  try {
+    const ok = nacl.sign.detached.verify(
+      new TextEncoder().encode(message),
+      bs58.decode(signatureB58),
+      new PublicKey(wallet).toBytes(),
+    );
+    return ok ? { ok: true } : { ok: false, why: "signature does not match that wallet" };
+  } catch (e) {
+    return { ok: false, why: `bad signature: ${String(e).slice(0, 80)}` };
+  }
+}
+
+export const listMessage = (raffleId: string, n: number, priceUsd: number, ts: number) =>
+  `KUJI:LIST:${raffleId}:${n}:${priceUsd}:${ts}`;
+export const cancelMessage = (listingId: string, ts: number) => `KUJI:CANCEL:${listingId}:${ts}`;
 
 function ticketsOf(raffleId: string, wallet: string): number {
   const r = state.raffles.find((x) => x.id === raffleId);
