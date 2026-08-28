@@ -281,10 +281,10 @@ const ago = (t: number) => {
 
 function shell(title: string, body: string, ticker?: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>NERDNAME — ${title}</title><style>${CSS}</style></head><body>
+<title>KUJI — ${title}</title><style>${CSS}</style></head><body>
 <div class="noise"></div>
 <header class="hd">
-  <a class="wordmark" href="/">NERD<b>NAME</b><span style="font:10px var(--lab);vertical-align:top">®</span></a>
+  <a class="wordmark" href="/">KU<b>JI</b></a>
   <nav>${(() => { const m = state.machines.find((x) => x.status === "open"); return m ? `<a href="/machine/${m.id}" style="color:var(--signal)">Candy Machine</a>` : ""; })()}<a href="/raffles">Raffles</a><a href="/vault">The Vault</a><a href="/grades">Receipts</a><a href="/feed">Live Feed</a></nav>
   <div style="display:flex;gap:14px;align-items:center">
     ${cfg.xUrl ? `<a class="xlink" href="${cfg.xUrl}" target="_blank" rel="noopener" aria-label="X">𝕏</a>` : ""}

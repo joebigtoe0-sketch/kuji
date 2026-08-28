@@ -15,7 +15,7 @@ import { solUsd } from "./solprice.js";
  */
 
 const BASE = "https://api.collectorcrypt.com";
-const H = { "user-agent": "nerdname/0.1 (the card machine)", accept: "application/json" };
+const H = { "user-agent": "kuji/1.0 (the capsule machine)", accept: "application/json" };
 
 export interface Listing {
   nft: string;

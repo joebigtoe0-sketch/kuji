@@ -30,6 +30,14 @@ function loadKeypair(): Keypair {
     const kp = Keypair.generate();
     fs.writeFileSync(f, JSON.stringify(Array.from(kp.secretKey)));
     log.warn("wallet", `generated NEW keypair ${kp.publicKey.toBase58()} → data/wallet.json (fund it before live mode)`);
+    // On a host with ephemeral disk this fires on EVERY deploy: a brand new
+    // wallet each time, with the funded one stranded and unrecoverable.
+    // Loud, because silence here costs real money.
+    if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.NODE_ENV === "production") {
+      log.warn("wallet", "⚠ RUNNING DEPLOYED WITH NO WALLET ON DISK.");
+      log.warn("wallet", "⚠ Either set WALLET_SECRET, or mount a persistent volume at the data dir —");
+      log.warn("wallet", "⚠ otherwise every redeploy mints a new wallet and abandons the funded one.");
+    }
     return kp;
   }
 }

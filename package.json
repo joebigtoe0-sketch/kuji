@@ -1,6 +1,6 @@
 {
-  "name": "nerdname",
-  "version": "0.1.0",
+  "name": "kuji",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -22,6 +22,7 @@
     "typescript": "^5.5.0"
   },
   "engines": {
-    "node": ">=20"
-  }
+    "node": ">=20 <23"
+  },
+  "description": "KUJI \u2014 the zero-edge capsule machine for graded trading cards"
 }

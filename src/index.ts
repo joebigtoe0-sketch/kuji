@@ -21,7 +21,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
- * NERDNAME — the card machine, PAPER MODE.
+ * KUJI — the zero-edge capsule machine.
  * Real marketplace data, real commit-reveal against real Solana blockhashes,
  * fake money. The point: prove the edges and the mechanics before launch.
  */
@@ -215,11 +215,22 @@ app.get("/api/verify/:id", (req, res) => {
   res.json({ raffle: r.id, status: r.status, commitHash: r.commitHash, seed: r.seed, resolveSlot: r.resolveSlot, blockhash: r.blockhash, winner: r.winner, verified: check });
 });
 
+// Railway healthcheck — cheap, no chain calls
+app.get("/health", (_req, res) => res.json({
+  ok: true, mode: cfg.live ? (cfg.devnet ? "live-devnet" : "live") : "paper",
+  halted: halted(), vault: state.vault.length,
+  openRaffles: state.raffles.filter((r) => r.status === "open").length,
+  uptimeSec: Math.round(process.uptime()),
+}));
+
 // ---------- the site ----------
 mountSite(app);
 
 // ---------- jobs ----------
-const envLiveBoot = cfg.live; // bind host by boot state; the toggle changes behavior, not the socket
+// Bind 0.0.0.0 when deployed (Railway routes to the container's public
+// interface — binding loopback there makes the app unreachable), 127.0.0.1
+// for local dev so a laptop doesn't serve the machine to its whole network.
+const deployed = !!(process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_PROJECT_ID || process.env.NODE_ENV === "production");
 setInterval(() => void scan().catch((e) => log.warn("sniper", String(e).slice(0, 100))), cfg.scanEveryMin * 60_000);
 setTimeout(() => void scan().catch((e) => log.warn("sniper", String(e).slice(0, 100))), 3000);
 setInterval(() => void tickRaffles().catch(() => {}), 30_000);
@@ -237,7 +248,14 @@ setInterval(() => { if (cfg.live) void watchPayments().catch((e) => log.warn("pa
 setInterval(() => { if (cfg.live) void tickPayouts().catch((e) => log.warn("payout", String(e).slice(0, 100))); }, 20_000);
 setInterval(() => { if (!cfg.live) try { simTick(); } catch {} }, cfg.simBuyEverySec * 1000);
 
-app.listen(cfg.port, process.env.HOST ?? (envLiveBoot ? "0.0.0.0" : "127.0.0.1"), () => {
-  log.info("nerd", `${cfg.live ? (cfg.devnet ? "LIVE (devnet)" : "LIVE (MAINNET)") : "paper"} machine on port ${cfg.port} — wallet ${walletPk.toBase58()}, vault ${state.vault.length} cards${halted() ? " — ⚠ HALTED" : ""}`);
+// Live mode with no admin key means no kill switch and no way to re-price a
+// suspect card — refuse to run real money with no brakes.
+if (cfg.live && !cfg.adminKey) {
+  log.warn("kuji", "LIVE_MODE is on but ADMIN_KEY is unset — that leaves no halt switch. Refusing to start.");
+  process.exit(1);
+}
+
+app.listen(cfg.port, process.env.HOST ?? (deployed ? "0.0.0.0" : "127.0.0.1"), () => {
+  log.info("kuji", `${cfg.live ? (cfg.devnet ? "LIVE (devnet)" : "LIVE (MAINNET)") : "paper"} machine on port ${cfg.port} — wallet ${walletPk.toBase58()}, vault ${state.vault.length} cards${halted() ? " — ⚠ HALTED" : ""}`);
   save();
 });
