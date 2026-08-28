@@ -758,9 +758,9 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
       on-chain, payments/refunds/prizes move for real, and the simulator stops. Paper mode simulates everything.</p>
       <button class="cta" id="livebtn" style="padding:12px 22px"><b>…</b></button>
       <button class="cta" id="haltbtn" style="padding:12px 22px;background:var(--red);box-shadow:0 6px 0 #8f2222"><b>…</b></button>
-      <p style="font-size:13px;margin:16px 0 8px">Bootstrap mode: at launch, inventory beats edge. Cheap cards
-      (under $${cfg.bootstrapMaxCardUsd}) buy at a relaxed ${Math.round(cfg.bootstrapMinEdge * 100)}% edge bar, and penny cards under
-      $${cfg.junkMaxUsd} buy with no edge at all as capsule filler. Turn it off once the vault is stocked.</p>
+      <p style="font-size:13px;margin:16px 0 8px">Bootstrap mode: at launch, inventory beats edge. Cards under
+      $${cfg.bootstrapMaxCardUsd} buy at a relaxed ${Math.round(cfg.bootstrapMinEdge * 100)}% edge bar instead of the usual
+      ${Math.round(cfg.minEdge * 100)}%. Turn it off once the vault is stocked.</p>
       <button class="cta" id="bootbtn" style="padding:10px 20px;background:var(--acid);box-shadow:0 6px 0 #2b7f74"><b>…</b></button>
       <p id="lmsg" class="dim" style="margin-top:10px;font-size:13px"></p>
     </div>
@@ -783,8 +783,7 @@ async function refresh(){
     ['wallet', st.wallet],
     ['SOL / USDC', st.sol+' / $'+st.usdc],
     ['vault / raffles / machine', st.vault+' cards / '+st.openRaffles+' open / '+(st.openMachine?'running':'none')],
-    ['junk cards (capsule filler)', st.junk],
-    ['bootstrap mode', st.bootstrap?'ON — cheap cards on a relaxed edge + junk buying':'off — full edge bar only'],
+    ['bootstrap mode', st.bootstrap?'ON — cheap cards clear a relaxed edge bar':'off — full edge bar only'],
     ['payouts pending / stuck', st.payouts.pending+' / '+st.payouts.stuck.length],
     ['token CA', st.tokenMint||'— not set'],
     ['X', st.xUrl||'— not set'],

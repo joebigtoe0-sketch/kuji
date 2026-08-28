@@ -1,6 +1,6 @@
 import { cfg } from "./config.js";
 import type { Listing } from "./cc.js";
-import { signAndSendBase64, usdcBalance } from "./wallet.js";
+import { signAndSendBase64, usdcBalance, solBalance } from "./wallet.js";
 import { walletPk } from "./wallet.js";
 import { ownsAsset } from "./assets.js";
 import { ledger } from "./store.js";
@@ -27,9 +27,17 @@ export async function realBuy(l: Listing): Promise<BuyResult> {
   if (halted()) return { ok: false, why: "machine is halted" };
   if (l.priceUsd > cfg.liveMaxCardUsd)
     return { ok: false, why: `$${l.priceUsd} exceeds live per-card cap $${cfg.liveMaxCardUsd}` };
-  const bal = await usdcBalance();
-  if (bal < l.priceUsd + 1) // +1 buffer for marketplace rounding
-    return { ok: false, why: `USDC balance $${bal.toFixed(2)} < price $${l.priceUsd}` };
+  // a listing is paid in ITS OWN currency — check that balance, not USD
+  if (l.currency === "SOL") {
+    const sol = await solBalance();
+    // keep a fee/rent cushion back
+    if (sol < l.priceNative + 0.02)
+      return { ok: false, why: `SOL balance ${sol.toFixed(4)} < price ${l.priceNative} (+fees)` };
+  } else {
+    const bal = await usdcBalance();
+    if (bal < l.priceUsd + 1) // +1 buffer for marketplace rounding
+      return { ok: false, why: `USDC balance $${bal.toFixed(2)} < price $${l.priceUsd}` };
+  }
 
   // fetch the buy tx and send it immediately — the blockhash is ticking
   const res = await fetch(`${BASE}/marketplace/buy`, {
@@ -61,7 +69,7 @@ export async function realBuy(l: Listing): Promise<BuyResult> {
   // NFT actually sits in our wallet (or give up loudly and flag for review)
   for (let i = 0; i < 10; i++) {
     if (await ownsAsset(l.nft)) {
-      ledger("live-buy", { nft: l.nft, item: l.itemName, price: l.priceUsd, sig });
+      ledger("live-buy", { nft: l.nft, item: l.itemName, price: l.priceUsd, currency: l.currency, priceNative: l.priceNative, sig });
       log.info("buyer", `LIVE BUY confirmed + owned: ${l.itemName.slice(0, 50)} @ $${l.priceUsd} (${sig})`);
       return { ok: true, sig };
     }

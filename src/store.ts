@@ -20,7 +20,6 @@ export interface VaultCard {
   boughtAt: number;
   raffleId?: string; // assigned to a raffle
   machineId?: string; // in a capsule machine (headline or junk filler)
-  role?: "junk"; // penny filler card — valued at cost, never raffled
   status: "vault" | "raffled" | "machined" | "awarded" | "holder_prize";
 }
 

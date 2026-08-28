@@ -68,17 +68,18 @@ export const cfg = {
 
   /**
    * Bootstrap mode (admin-toggleable, ON by default): at launch, inventory
-   * beats edge. Cheap cards buy on a relaxed edge bar, and penny "junk"
-   * cards buy with NO edge requirement at all — they're capsule filler,
-   * valued at exactly what they cost (still zero-edge).
+   * beats edge — cheap cards clear a relaxed edge bar so the vault stocks
+   * up in days instead of weeks.
+   *
+   * (There used to be a "junk" tier that bought sub-$3 cards as capsule
+   * filler. Deleted 2026-08-27: a market scan of all 4000 live listings
+   * found NOTHING under $2 and only 17 listings under $5 — graded+vaulted
+   * cards have a hard floor near $13 because grading alone costs more than
+   * that. The card basket already does the filler job.)
    */
   get bootstrap() { return runtime.bootstrap ?? bool("BOOTSTRAP", true); },
   bootstrapMinEdge: num("BOOTSTRAP_MIN_EDGE", 0.05), // relaxed bar for cheap cards
   bootstrapMaxCardUsd: num("BOOTSTRAP_MAX_CARD_USD", 40), // "cheap" = up to this
-  junkMaxUsd: num("JUNK_MAX_USD", 3), // junk tier: capsule-filler cards
-  junkTarget: num("JUNK_TARGET", 30), // keep this many junk cards on hand
-  junkBuysPerSweep: num("JUNK_BUYS_PER_SWEEP", 5),
-  junkPerMachine: num("JUNK_PER_MACHINE", 12), // junk cards stuffed into each machine
   payWatchEverySec: num("PAY_WATCH_EVERY_SEC", 20),
 
   // sniper

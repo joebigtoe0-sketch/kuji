@@ -152,7 +152,6 @@ app.get("/api/admin/status", async (req, res) => {
   res.json({
     live: cfg.live, devnet: cfg.devnet, halted: halted(), bootstrap: cfg.bootstrap,
     tokenMint: cfg.tokenMint, xUrl: cfg.xUrl,
-    junk: state.vault.filter((v) => v.role === "junk" && v.status === "vault").length,
     vault: state.vault.filter((v) => v.status === "vault").length,
     openRaffles: state.raffles.filter((r) => r.status === "open").length,
     openMachine: state.machines.some((m) => m.status === "open"),

@@ -5,7 +5,14 @@ import { state, save, ledger } from "./store.js";
 import { log } from "./log.js";
 import { realBuy } from "./buyer.js";
 import { halted } from "./halt.js";
-import { usdcBalance } from "./wallet.js";
+import { usdcBalance, solBalance } from "./wallet.js";
+import { solUsd } from "./solprice.js";
+
+/** Spendable bankroll in USD: USDC + SOL (minus a fee cushion). */
+async function bankrollUsd(): Promise<number> {
+  const [usdc, sol, px] = await Promise.all([usdcBalance(), solBalance(), solUsd()]);
+  return +(usdc + Math.max(0, sol - 0.02) * px).toFixed(2);
+}
 
 /**
  * The sniper — scans newest listings, prices them against the comp index,
@@ -22,7 +29,7 @@ export async function scan(): Promise<void> {
   scanning = true;
   try {
     // live mode prices guardrails off the real bankroll, not the paper number
-    if (cfg.live) state.walletUsd = await usdcBalance();
+    if (cfg.live) state.walletUsd = await bankrollUsd();
     const all: Listing[] = [];
     for (let p = 1; p <= cfg.scanPages; p++) {
       try {
@@ -82,7 +89,7 @@ export async function scan(): Promise<void> {
       if (cfg.live) {
         const r = await realBuy(l);
         if (!r.ok) continue; // reason already in the ledger
-        state.walletUsd = await usdcBalance();
+        state.walletUsd = await bankrollUsd();
       } else {
         state.walletUsd -= l.priceUsd;
       }
@@ -102,53 +109,9 @@ export async function scan(): Promise<void> {
       });
       log.info("sniper", `${cfg.live ? "LIVE" : "PAPER"} BUY ${l.itemName.slice(0, 60)} @ $${l.priceUsd} (comp $${comp.compUsd}, edge ${(edge * 100).toFixed(0)}%)`);
     }
-    const junk = cfg.bootstrap ? await junkPass(all) : 0;
     save();
-    log.info("sniper", `sweep: ${all.length} listings, index ${st.groups} groups/${st.rows} rows, ${considered} priced, ${buys} ${cfg.live ? "live" : "paper"} buys${junk ? `, ${junk} junk` : ""}, wallet $${state.walletUsd.toFixed(2)}`);
+    log.info("sniper", `sweep: ${all.length} listings, index ${st.groups} groups/${st.rows} rows, ${considered} priced, ${buys} ${cfg.live ? "live" : "paper"} buys, wallet $${state.walletUsd.toFixed(2)}`);
   } finally {
     scanning = false;
   }
-}
-
-/**
- * The junk pass — penny cards for the capsule machine, NO edge required.
- * A capsule that pops a real (worthless) card beats a 12¢ cash envelope:
- * same EV, infinitely better theater. Valued at exactly what they cost,
- * so the zero-edge math never lies.
- */
-async function junkPass(all: Listing[]): Promise<number> {
-  const held = state.vault.filter((v) => v.role === "junk" && v.status === "vault").length;
-  const need = Math.min(cfg.junkTarget - held, cfg.junkBuysPerSweep);
-  if (need <= 0) return 0;
-  const ids = new Set(state.vault.map((v) => `${v.itemName}|${v.gradingCompany}|${v.grade}`.toLowerCase()));
-  const candidates = all
-    .filter((l) => l.priceUsd > 0 && l.priceUsd <= cfg.junkMaxUsd)
-    .filter((l) => !state.seenPaper.includes(l.nft) && !state.vault.some((v) => v.nft === l.nft))
-    .sort((a, b) => a.priceUsd - b.priceUsd);
-  let bought = 0;
-  for (const l of candidates) {
-    if (bought >= need) break;
-    const idKey = `${l.itemName}|${l.gradingCompany}|${l.grade}`.toLowerCase();
-    if (ids.has(idKey)) continue;
-    if (state.walletUsd < l.priceUsd) break;
-    if (cfg.live) {
-      const r = await realBuy(l);
-      if (!r.ok) continue;
-      state.walletUsd = await usdcBalance();
-    } else {
-      state.walletUsd -= l.priceUsd;
-    }
-    state.seenPaper.push(l.nft);
-    state.vault.push({
-      nft: l.nft, itemName: l.itemName, category: l.category, grade: l.grade,
-      gradingCompany: l.gradingCompany, image: l.image,
-      paidUsd: l.priceUsd, compUsd: l.priceUsd, compBasis: "junk filler — valued at cost",
-      boughtAt: Date.now(), status: "vault", role: "junk",
-    });
-    ids.add(idKey);
-    bought++;
-    ledger(cfg.live ? "live-buy-junk" : "paper-buy-junk", { nft: l.nft, item: l.itemName, price: l.priceUsd });
-    log.info("sniper", `${cfg.live ? "LIVE" : "PAPER"} JUNK ${l.itemName.slice(0, 50)} @ $${l.priceUsd} (capsule filler)`);
-  }
-  return bought;
 }

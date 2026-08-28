@@ -107,21 +107,19 @@ export function machineManifest(m: Machine): string {
 
 /**
  * Build an exact zero-edge prize table: the card basket (chase first) +
- * junk filler (valued at cost) + cash envelopes. sum(prizes) ==
- * N*price + rolledIn, EXACTLY — leftover cents land on one odd envelope.
+ * cash envelopes. sum(prizes) == N*price + rolledIn, EXACTLY — leftover
+ * cents land on one odd envelope.
  */
-function buildPrizes(cards: VaultCard[], junk: VaultCard[], capsules: number, priceUsd: number, rolledInUsd: number): Prize[] | null {
+function buildPrizes(cards: VaultCard[], capsules: number, priceUsd: number, rolledInUsd: number): Prize[] | null {
   const totalC = Math.round(capsules * priceUsd * 100) + Math.round(rolledInUsd * 100);
-  const cardsC = [...cards, ...junk].reduce((s, c) => s + Math.round(c.compUsd * 100), 0);
+  const cardsC = cards.reduce((s, c) => s + Math.round(c.compUsd * 100), 0);
   let cashC = totalC - cardsC;
-  const slots = capsules - cards.length - junk.length; // cash envelopes
+  const slots = capsules - cards.length; // cash envelopes
   if (cashC < slots || slots < 1) return null;
   const prizes: Prize[] = cards.map((c, i) => ({
     kind: "card" as const, nft: c.nft, valueUsd: c.compUsd,
     label: `${i === 0 ? "THE CHASE" : "CARD"} — ${c.itemName.slice(0, 56)}`,
   }));
-  for (const j of junk)
-    prizes.push({ kind: "card", nft: j.nft, valueUsd: j.compUsd, label: `CARD — ${j.itemName.slice(0, 50)}` });
   const n5 = Math.min(Math.floor((cashC * 0.25) / 500), Math.max(0, slots - 2));
   const n1 = Math.min(Math.floor((cashC * 0.35) / 100), Math.max(0, slots - n5 - 1));
   const nDime = slots - n5 - n1;
@@ -149,7 +147,7 @@ export async function autoMachine(): Promise<void> {
   if (halted()) return;
   if (state.machines.some((m) => m.status === "open")) return;
   const eligible = state.vault
-    .filter((v) => v.status === "vault" && v.role !== "junk" && !suspectComp(v) && v.compUsd <= cfg.machineMaxCardUsd)
+    .filter((v) => v.status === "vault" && !suspectComp(v) && v.compUsd <= cfg.machineMaxCardUsd)
     .sort((a, b) => a.compUsd - b.compUsd);
   if (eligible.length < cfg.minCardsPerMachine) return; // wait for stock — a
   // one-card machine is the high-variance shape we are avoiding
@@ -158,26 +156,29 @@ export async function autoMachine(): Promise<void> {
 
 export async function createMachine(basket: VaultCard[]): Promise<Machine | null> {
   if (!basket.length) return null;
+  // THE RULE, enforced here and not only at the caller: a card whose edge
+  // is too good to be true never sets a rack price. The rack price IS the
+  // capsule price, so one bogus comp would overcharge every buyer.
+  const suspect = basket.filter(suspectComp);
+  if (suspect.length) {
+    ledger("machine-blocked-suspect", { cards: suspect.map((v) => ({ nft: v.nft, item: v.itemName, paid: v.paidUsd, comp: v.compUsd })) });
+    log.warn("capsule", `refusing to build: ${suspect.length} card(s) with suspect comps — re-price them in /admin first`);
+    return null;
+  }
   const priceUsd = cfg.capsuleUsd;
   const rolledIn = state.rolloverUsd;
   // chase = the best card in the basket; it headlines the machine
   const cards = [...basket].sort((a, b) => b.compUsd - a.compUsd);
   const chase = cards[0];
-  // junk filler: real (cheap) cards beat cash envelopes as theater — same EV,
-  // and "you pulled a card" reads better than "you pulled 12¢"
-  const junk = state.vault
-    .filter((v) => v.role === "junk" && v.status === "vault")
-    .sort((a, b) => a.compUsd - b.compUsd)
-    .slice(0, cfg.junkPerMachine);
-  const cardsValue = [...cards, ...junk].reduce((s, c) => s + c.compUsd, 0);
+  const cardsValue = cards.reduce((s, c) => s + c.compUsd, 0);
   // size the machine so no single card exceeds maxCardShare of the pool —
   // that share is what drives per-machine variance (see header)
   const capsules = Math.max(
-    cards.length + junk.length + 2,
+    cards.length + 2,
     Math.ceil(chase.compUsd / (priceUsd * cfg.maxCardShare)),
     Math.ceil((cardsValue + rolledIn) / priceUsd),
   );
-  const prizes = buildPrizes(cards, junk, capsules, priceUsd, rolledIn);
+  const prizes = buildPrizes(cards, capsules, priceUsd, rolledIn);
   if (!prizes) return null;
   const id = crypto.randomBytes(6).toString("hex");
   const m: Machine = {
@@ -188,7 +189,7 @@ export async function createMachine(basket: VaultCard[]): Promise<Machine | null
   m.commitHash = crypto.createHash("sha256").update(machineManifest(m)).digest("hex");
   m.commitSig = await publishCommit(id, m.commitHash, 0); // slot 0 = "no future slot; per-open entropy"
   state.rolloverUsd = 0;
-  for (const v of [...cards, ...junk]) {
+  for (const v of cards) {
     v.machineId = id;
     v.status = "machined";
   }
@@ -198,11 +199,11 @@ export async function createMachine(basket: VaultCard[]): Promise<Machine | null
     id, nft: chase.nft, item: chase.itemName, capsules, startPriceUsd: priceUsd,
     cards: cards.length, chaseUsd: chase.compUsd,
     chaseShare: +(chase.compUsd / (capsules * priceUsd)).toFixed(3),
-    junkCards: junk.length, cardsValue: +cardsValue.toFixed(2),
+    cardsValue: +cardsValue.toFixed(2),
     cashValue: +(capsules * priceUsd + rolledIn - cardsValue).toFixed(2),
     rolledInUsd: rolledIn, commit: m.commitHash,
   });
-  log.info("capsule", `MACHINE ${id}: ${capsules} capsules from $${priceUsd} — ${cards.length} cards (chase ${chase.itemName.slice(0, 34)} $${chase.compUsd}, ${(100 * chase.compUsd / (capsules * priceUsd)).toFixed(0)}% of rack) + ${junk.length} junk + cash${rolledIn ? ` (+$${rolledIn} rolled in)` : ""}`);
+  log.info("capsule", `MACHINE ${id}: ${capsules} capsules from $${priceUsd} — ${cards.length} cards (chase ${chase.itemName.slice(0, 34)} $${chase.compUsd}, ${(100 * chase.compUsd / (capsules * priceUsd)).toFixed(0)}% of rack) + cash${rolledIn ? ` (+$${rolledIn} rolled in)` : ""}`);
   return m;
 }
 
