@@ -100,11 +100,15 @@ export const cfg = {
   // capsule machines
   capsuleUsd: num("CAPSULE_USD", 1),
   /**
-   * No single card may exceed this share of a machine's pool. A pool one
-   * prize can dominate is the negative-EV trap: the jackpot always ships
-   * while only half the capsules sell. Keep it flat and it sells through.
+   * No single card may exceed this share of a machine's rack. With a
+   * floating price the house earns the snipe spread on average whatever
+   * this is — but concentration drives the SWING. Measured on a $210 pool:
+   * one 20% chase = ±$40 and 47% losing machines; the same card value split
+   * across six 3% cards = ±$15 and 17%; fourteen 1.5% cards = ±$8 and 2%.
    */
-  maxCardShare: num("MAX_CARD_SHARE", 0.2),
+  maxCardShare: num("MAX_CARD_SHARE", 0.08),
+  cardsPerMachine: num("CARDS_PER_MACHINE", 8), // basket size — diversification is free variance reduction
+  minCardsPerMachine: num("MIN_CARDS_PER_MACHINE", 3), // below this, wait for stock rather than build a coin-flip
   machineMaxCardUsd: num("MACHINE_MAX_CARD_USD", 150), // bigger cards go to raffles instead
 
   // raffles

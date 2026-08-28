@@ -10,7 +10,7 @@ import { cfg } from "./config.js";
 import { connection, walletPk } from "./wallet.js";
 import { state, save, ledger } from "./store.js";
 import { queuePayout } from "./payouts.js";
-import { openCapsules } from "./capsules.js";
+import { openCapsules, quote } from "./capsules.js";
 import { fillListing } from "./market.js";
 import { blockhashOfSlot } from "./draw.js";
 import { log } from "./log.js";
@@ -71,14 +71,17 @@ export async function buildPayTx(raffleId: string, n: number, payer: string, cur
   return { ok: true, tx: await buildTransfer(payer, usd, `NERD:TICKETS:${raffleId}:${n}`, currency) };
 }
 
-/** Capsule opens: the payment tx ITSELF becomes the draw entropy. */
+/** Capsule opens: the payment tx ITSELF becomes the draw entropy. Priced
+ *  at the LIVE rack price; if it moves before confirmation the buyer gets
+ *  whatever their payment buys and the remainder is refunded. */
 export async function buildCapsulePayTx(machineId: string, n: number, payer: string, currency: "usdc" | "ansem" = "usdc"): Promise<{ ok: boolean; tx?: string; why?: string }> {
   const m = state.machines.find((x) => x.id === machineId);
   if (!m || m.status !== "open") return { ok: false, why: "no open machine" };
   const left = m.prizes.filter((p) => !p.claimedBy).length;
-  if (n < 1 || n > Math.min(left, 10)) return { ok: false, why: `1-${Math.min(left, 10)} capsules per tx` };
-  const usd = +(n * m.priceUsd).toFixed(2);
-  return { ok: true, tx: await buildTransfer(payer, usd, `NERD:CAPSULE:${machineId}:${n}`, currency) };
+  if (n < 1 || n > Math.min(left, 25)) return { ok: false, why: `1-${Math.min(left, 25)} capsules per tx` };
+  const q = quote(m, n);
+  if (q.totalUsd < 0.05) return { ok: false, why: "rack is worth less than the minimum payment — buy more capsules at once" };
+  return { ok: true, tx: await buildTransfer(payer, q.totalUsd, `NERD:CAPSULE:${machineId}:${n}`, currency) };
 }
 
 /** Secondary-market fill: buyer pays the machine wallet (escrow leg). */
@@ -153,14 +156,15 @@ export async function watchPayments(): Promise<void> {
         }
         refund(usdReceived - n * r.ticketUsd, r.id, n === 0 ? "sold out — full refund" : "overpayment change");
       } else if (cap) {
-        const [, machineId] = cap;
+        const [, machineId, claimedN] = cap;
         const m = state.machines.find((x) => x.id === machineId);
         if (!m || m.status !== "open") {
           refund(usdReceived, machineId, "machine closed — full refund");
           continue;
         }
-        const n = Math.floor(usdReceived / m.priceUsd + 0.001);
-        if (n < 1) { refund(usdReceived, machineId, "below capsule price — refund"); continue; }
+        // the price floats, so the payment itself is the budget: open as
+        // many capsules as it buys at the live price, refund the rest
+        const n = Math.max(1, Math.min(Number(claimedN) || 1, 25));
         // the payment tx is the entropy: its sig + its confirmation slot's blockhash
         let bh: string;
         try {
@@ -169,9 +173,9 @@ export async function watchPayments(): Promise<void> {
           seenSigs = seenSigs.filter((x) => x !== s.signature); // retry next tick
           continue;
         }
-        const res = await openCapsules(machineId, payer, n, { txSig: s.signature, slot: s.slot, blockhash: bh });
-        const opened = res.ok ? res.prizes!.length : 0;
-        refund(usdReceived - opened * m.priceUsd, machineId, opened === 0 ? "machine emptied — full refund" : "partial fill — change");
+        const res = await openCapsules(machineId, payer, n, { txSig: s.signature, slot: s.slot, blockhash: bh }, usdReceived);
+        const spent = res.ok ? res.spentUsd! : 0;
+        refund(usdReceived - spent, machineId, res.ok ? "unspent — change" : "could not open — full refund");
       } else if (mkt) {
         const [, listingId] = mkt;
         const l = state.market.find((x) => x.id === listingId);

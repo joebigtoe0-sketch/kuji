@@ -11,7 +11,7 @@ import { gradeVault } from "./grader.js";
 import { autoRaffle } from "./raffles.js";
 import { simTick, seededHolders } from "./sim.js";
 import { buildPayTx, buildCapsulePayTx, buildMarketPayTx, watchPayments } from "./payments.js";
-import { autoMachine, openCapsules, verifyMachine } from "./capsules.js";
+import { autoMachine, openCapsules, verifyMachine, capsulePrice, quote } from "./capsules.js";
 import { listTickets, cancelListing, fillListing, marketFor, tickMarket } from "./market.js";
 import { tickPayouts, pendingPayouts, stuckPayouts } from "./payouts.js";
 import { snapshotHolders } from "./holders.js";
@@ -116,6 +116,19 @@ app.post("/api/machine/:id/open", async (req, res) => {
   res.json(await openCapsules(req.params.id, buyer, Math.max(1, Number(req.body?.n) || 1)));
 });
 app.get("/api/verify-machine/:id", (req, res) => res.json(verifyMachine(req.params.id)));
+// the live rack price — the page polls this so the sign moves in real time
+app.get("/api/machine/:id/price", (req, res) => {
+  const m = state.machines.find((x) => x.id === req.params.id);
+  if (!m) return res.status(404).json({ ok: false });
+  const left = m.prizes.filter((p) => !p.claimedBy);
+  res.json({
+    ok: true, status: m.status,
+    priceUsd: capsulePrice(m), startPriceUsd: m.priceUsd,
+    left: left.length, of: m.capsules,
+    rackValueUsd: +left.reduce((s, p) => s + p.valueUsd, 0).toFixed(2),
+    quote: quote(m, Math.max(1, Number(req.query.n) || 1)),
+  });
+});
 app.post("/api/market/list", (req, res) => {
   res.json(listTickets(String(req.body?.raffle ?? ""), String(req.body?.seller ?? ""), Number(req.body?.n) || 0, Number(req.body?.price) || 0));
 });

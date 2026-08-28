@@ -60,7 +60,7 @@ function simCapsules(): void {
   const n = 1 + Math.floor(Math.random() * 3);
   void openCapsules(m.id, buyer, n).then((res) => {
     if (res.ok && res.prizes)
-      log.info("sim", `${buyer} opened ${res.prizes.length} capsule(s): ${res.prizes.map((p) => p.label).join(", ").slice(0, 80)}`);
+      log.info("sim", `${buyer} opened ${res.prizes.length} capsule(s) for $${res.spentUsd}: ${res.prizes.map((p) => p.label).join(", ").slice(0, 70)}`);
   }).catch(() => {});
 }
 

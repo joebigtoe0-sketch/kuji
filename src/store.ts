@@ -68,6 +68,7 @@ export interface CapsuleOpen {
   slot: number;
   blockhash: string; // blockhash of the confirmation slot — the other half
   prizeIdx: number; // index into machine.prizes
+  priceUsd: number; // what the rack was worth per capsule at this open
   at: number;
 }
 
@@ -85,7 +86,7 @@ export interface Machine {
   title: string;
   nft: string; // headline card
   capsules: number;
-  priceUsd: number;
+  priceUsd: number; // STARTING price (pool ÷ capsules); the live price floats — see capsules.ts
   prizes: Prize[];
   opens: CapsuleOpen[];
   commitHash: string; // sha256 of the manifest (prize table + rules)

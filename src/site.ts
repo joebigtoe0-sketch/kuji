@@ -4,6 +4,7 @@ import { state, ledgerTail, type Machine } from "./store.js";
 import { gradeStats, grades } from "./grader.js";
 import { indexStats } from "./comps.js";
 import { marketFor } from "./market.js";
+import { capsulePrice, remainingPrizes } from "./capsules.js";
 
 /**
  * The machine's storefront — TCG identity: Pokemon-logo type treatment
@@ -172,7 +173,10 @@ font:800 10.5px var(--lab);letter-spacing:.08em;text-transform:uppercase}
 .chip.card{background:var(--holo);border-color:#fff;color:#06251f}
 .chip s{opacity:.5}
 .machmeta{display:flex;gap:26px;align-items:baseline;margin:6px 0 2px}
-.machmeta .px{font:400 2.2rem var(--disp);color:var(--signal)}
+.machmeta .px{font:400 2.2rem var(--disp);color:var(--signal);transition:color .2s}
+.machmeta .px.moved{animation:pxflash .9s ease-out}
+@keyframes pxflash{0%{color:#fff;text-shadow:0 0 30px #6fe0ff}100%{color:var(--signal);text-shadow:none}}
+.pricenote{font-size:13px;font-weight:600;opacity:.82;margin:10px 0 4px;max-width:52ch}
 .machmeta small{font:900 10px var(--lab);letter-spacing:.14em;text-transform:uppercase;opacity:.6}
 @media(max-width:860px){.mach{display:block}}
 /* capsule reveal - pack rip */
@@ -361,13 +365,15 @@ function machBlock(m: Machine, card: { image?: string } | undefined): string {
       <p class="lab" style="color:var(--acid)">CAPSULE MACHINE ${m.id} · EVERY ENVELOPE PRICED · ZERO HOUSE EDGE</p>
       <h3>${m.title.slice(0, 60)}</h3>
       <div class="machmeta">
-        <div class="px">$${m.priceUsd}<small style="display:block">per capsule</small></div>
+        <div class="px" id="livepx" data-m="${m.id}">$${capsulePrice(m).toFixed(2)}<small style="display:block">per capsule — floats</small></div>
         <div><b style="font:400 1.5rem var(--disp)">${m.capsules - opened}</b><small style="display:block">capsules left</small></div>
-        ${m.rolledInUsd ? `<div><b style="font:400 1.5rem var(--disp);color:var(--green)">+$${m.rolledInUsd}</b><small style="display:block">rolled in</small></div>` : ""}
+        <div><b style="font:400 1.5rem var(--disp)">$${remainingPrizes(m).reduce((t, p) => t + p.valueUsd, 0).toFixed(2)}</b><small style="display:block">still in the rack</small></div>
       </div>
+      <p class="pricenote">A capsule always costs exactly what the rack is worth: value left ÷ capsules left.
+      Pull the chase and the price drops for everyone after you. Started at $${m.priceUsd.toFixed(2)}.</p>
       <div class="fill" style="margin:10px 0 4px"><i style="width:${(100 * opened) / m.capsules}%"></i></div>
       <div class="pool">${poolChips(m)}</div>
-      ${m.status === "open" ? `<a class="cta" href="/machine/${m.id}"><small>the pool is public — count what's left</small><b>OPEN A CAPSULE</b><span>↗</span></a>` : `<p class="lab" style="opacity:.6">closed — unclaimed cash rolled to the next machine</p>`}
+      ${m.status === "open" ? `<a class="cta" href="/machine/${m.id}"><small>the rack is public — count what's left</small><b>OPEN A CAPSULE</b><span>↗</span></a>` : `<p class="lab" style="opacity:.6">closed — unclaimed cash rolled to the next machine</p>`}
     </div>
   </div>`;
 }
@@ -410,7 +416,7 @@ ${(() => {
   const m = state.machines.find((x) => x.status === "open") ?? [...state.machines].reverse()[0];
   return m ? `<section>
   <h2>THE CANDY<br><i>MACHINE.</i></h2>
-  <p class="side">$${m.priceUsd} A CAPSULE · THE WHOLE POOL IS PUBLIC · BUY THEM ALL AND YOU GET IT ALL BACK</p>
+  <p class="side">PRICE = WHAT THE RACK IS WORTH, LIVE · THE WHOLE POOL IS PUBLIC · BUY IT ALL AND YOU GET IT ALL BACK</p>
   ${machBlock(m, cardOf(m.nft))}
 </section>` : "";
 })()}
@@ -595,9 +601,9 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
   <div style="margin-top:26px;display:flex;gap:18px;align-items:center;flex-wrap:wrap">
     ${cfg.live ? `
     <div class="qty" style="background:#fff"><button id="qm">−</button><b id="qn">1</b><button id="qp">+</button></div>
-    <button class="cta buycta" id="openbtn"><small id="openusd">$${m.priceUsd.toFixed(2)} USDC</small><b>OPEN WITH PHANTOM</b><span>◉</span></button>
+    <button class="cta buycta" id="openbtn"><small id="openusd">$${capsulePrice(m).toFixed(2)} USDC</small><b>OPEN WITH PHANTOM</b><span>◉</span></button>
     ` : `
-    <button class="cta buycta" id="openbtn"><small>paper mode — fake money, real draw</small><b>OPEN ONE (PAPER)</b><span>◉</span></button>
+    <button class="cta buycta" id="openbtn"><small id="openusd" data-paper="1">paper mode — $${capsulePrice(m).toFixed(2)} a capsule, real draw</small><b>OPEN ONE (PAPER)</b><span>◉</span></button>
     `}
     <p id="paymsg" class="dim" style="font-size:12px"></p>
   </div>` : ""}
@@ -608,7 +614,8 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
       <tr><td>prize table committed</td><td>${m.commitHash}</td></tr>
       ${m.commitSig ? `<tr><td>commit anchored on-chain</td><td><a style="color:var(--signal)" href="https://solscan.io/tx/${m.commitSig}${cfg.devnet ? "?cluster=devnet" : ""}">${m.commitSig}</a></td></tr>` : ""}
       <tr><td>per-open draw</td><td>sha256(machineId | your tx signature | blockhash of your confirmation slot) over the remaining pool — you fix your signature before that blockhash exists; we control neither</td></tr>
-      <tr><td>the rollover rule</td><td>when the card pops, the machine closes and every unclaimed envelope rolls into the next machine — the house never keeps one</td></tr>
+      <tr><td>the price rule</td><td>a capsule costs (value still in the rack) ÷ (capsules still in the rack), recomputed at every open — so every capsule is a fair bet at the moment you buy it, and there is no good or bad time to play</td></tr>
+      <tr><td>the machine ends</td><td>only when the rack is empty — no prize closes it early</td></tr>
       <tr><td>recompute every open</td><td><a style="color:var(--signal)" href="/api/verify-machine/${m.id}">/api/verify-machine/${m.id}</a></td></tr>
     </table>
   </div>
@@ -621,16 +628,36 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
 (function(){
   const btn=document.getElementById('openbtn'); if(!btn) return;
   const msg=document.getElementById('paymsg');
-  const price=${m.priceUsd};
+  let price=${capsulePrice(m)};
   let n=1;
-  const qn=document.getElementById('qn'), ou=document.getElementById('openusd');
-  if(qn){const draw=()=>{qn.textContent=n; ou.textContent='$'+(n*price).toFixed(2)+' USDC';};
-    document.getElementById('qm').onclick=()=>{n=Math.max(1,n-1);draw();};
-    document.getElementById('qp').onclick=()=>{n=Math.min(10,n+1);draw();};}
-  function reveal(prizes){
+  const qn=document.getElementById('qn'), ou=document.getElementById('openusd'), px=document.getElementById('livepx');
+  const draw=()=>{
+    if(qn) qn.textContent=n;
+    if(ou && !ou.dataset.paper) ou.textContent='$'+(n*price).toFixed(2)+' USDC';
+  };
+  async function tick(){
+    try{
+      const j=await (await fetch('/api/machine/${m.id}/price?n='+n)).json();
+      if(!j.ok) return;
+      const moved=Math.abs(j.priceUsd-price)>0.004;
+      price=j.priceUsd;
+      if(px){
+        px.firstChild.textContent='$'+price.toFixed(2);
+        if(moved){px.classList.remove('moved');void px.offsetWidth;px.classList.add('moved');}
+      }
+      if(ou&&!ou.dataset.paper) ou.textContent='$'+j.quote.totalUsd.toFixed(2)+' USDC';
+      if(j.status!=='open') location.reload();
+    }catch(e){}
+  }
+  setInterval(tick, 5000);
+  if(qn){
+    document.getElementById('qm').onclick=()=>{n=Math.max(1,n-1);draw();tick();};
+    document.getElementById('qp').onclick=()=>{n=Math.min(25,n+1);draw();tick();};
+  }
+  function reveal(prizes,spent){
     const d=document.createElement('div'); d.className='reveal';
     d.innerHTML='<div class="rc"><span>the capsule holds</span><b>'+prizes.map(p=>p.label).join('<br>')+'</b>'+
-      '<span>'+(prizes.some(p=>p.kind==='card')?'THE CARD IS YOURS':'total $'+prizes.reduce((s,p)=>s+p.valueUsd,0).toFixed(2))+'</span></div>';
+      '<span>paid $'+(spent||0).toFixed(2)+' · worth $'+prizes.reduce((s,p)=>s+p.valueUsd,0).toFixed(2)+'</span></div>';
     d.onclick=()=>location.reload();
     document.body.appendChild(d);
     setTimeout(()=>location.reload(), 6000);
@@ -653,7 +680,7 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
       msg.textContent='drawing against a live solana blockhash…';
       const j=await (await fetch('/api/machine/${m.id}/open',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({buyer:'you_'+Math.random().toString(36).slice(2,6),n:1})})).json();
       if(!j.ok){msg.textContent=j.why;return;}
-      reveal(j.prizes);
+      reveal(j.prizes, j.spentUsd);
       `}
     }catch(e){msg.textContent=String(e.message||e).slice(0,90);}
   };

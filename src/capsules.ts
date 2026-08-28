@@ -23,22 +23,72 @@ import { log } from "./log.js";
  * sha256(machineId | buyerTxSig | blockhash(confirmSlot)). The buyer's
  * signature is fixed before that blockhash exists; we control neither.
  *
- * WHY THE POOL IS FLAT (learned the expensive way, 2026-08-27): the first
- * design put ONE big card in and closed the machine the moment it popped.
- * That is structurally negative-EV — the jackpot is ALWAYS paid (it is the
- * closing event) while on average only half the capsules ever sell.
- * Simulated at -10% of pool per machine, break-even only at a >=50% snipe
- * edge, which the sniper rightly flags as a comp trap. So: no single card
- * may exceed maxCardShare of the pool, nothing closes the machine early,
- * and it runs until every capsule is opened. With a flat pool the expected
- * value of the capsules still in the rack stays ~= the price all the way
- * down, so there is never a rational moment to stop — it sells through,
- * and the machine earns exactly the snipe spread on the cards it ships.
+ * THE PRICE FLOATS — and this is the whole design, not a gimmick.
+ *
+ * A capsule costs exactly what the rack is worth right now:
+ *     price = (value still in the rack) / (capsules still in the rack)
+ *
+ * Two earlier designs died here (2026-08-27) and the reason is worth
+ * keeping: with a FIXED price and a public rack, buyers get a free option.
+ * The rack starts worth exactly the price; every pull moves it — pull junk
+ * and the rack becomes worth MORE than the price, pull the chase and it is
+ * worth less. Rational buyers only play the favourable states and walk
+ * away from the rest, and at zero house edge that option is paid for by
+ * the house. Measured: buyers stop after ~47% of capsules and the machine
+ * loses ~$6 per $210 pool. Closing the machine on the chase pull is worse
+ * (-10%): the jackpot is then ALWAYS paid while half the rack never sells.
+ *
+ * Floating the price removes the option entirely. Every capsule is a fair
+ * bet at the instant it is bought, so there is no moment worth waiting for
+ * and no moment worth avoiding — the rack sells through. Over a machine
+ * the house collects the sum of those fair prices and pays out the pool;
+ * in expectation those cancel, and what is left over is exactly the snipe
+ * spread on the cards. Per machine it swings either way (chase pulled
+ * early = we collected little for a lot); across machines it is the
+ * spread. That variance is the honest cost of a zero-edge gacha.
+ *
+ * Buyers see the price move live: pull the chase and the sign drops to
+ * "capsules 77¢" in front of everyone.
+ *
+ * WHY EACH MACHINE HOLDS SEVERAL CARDS, NOT ONE BIG ONE: with a floating
+ * price the house earns the snipe spread ON AVERAGE, but a single dominant
+ * prize makes the per-machine swing enormous — if it pops early the price
+ * collapses and we collect little for a lot. Measured on a $210 pool with
+ * a $42 chase: mean +$14 (the spread, correct) but a $40 standard
+ * deviation and 47% of machines losing money. Splitting the SAME $42 of
+ * card value across six $7 cards keeps the mean at +$14 and cuts the
+ * deviation to $15; across fourteen $3 cards it is $8 and only 2% of
+ * machines lose. Same edge, a fraction of the risk — so machines are
+ * built from a BASKET, and no single card may exceed maxCardShare.
  *
  * THE ROLLOVER RULE (in the manifest): if a machine is closed early with
  * capsules unsold, unclaimed cards return to the vault and unclaimed cash
  * rolls into the next machine. The house never keeps an envelope.
  */
+
+/** Prizes still in the rack. */
+export const remainingPrizes = (m: Machine): Prize[] => m.prizes.filter((p) => !p.claimedBy);
+
+/**
+ * THE LIVE PRICE: value still in the rack ÷ capsules still in the rack.
+ * A capsule is therefore always a fair bet at the moment it is bought.
+ */
+export function capsulePrice(m: Machine): number {
+  const left = remainingPrizes(m);
+  if (!left.length) return 0;
+  const value = left.reduce((s, p) => s + p.valueUsd, 0);
+  return Math.max(0.01, +(value / left.length).toFixed(2));
+}
+
+/** What n capsules cost right now (each priced as the rack depletes). */
+export function quote(m: Machine, n: number): { n: number; totalUsd: number; priceUsd: number } {
+  const left = remainingPrizes(m);
+  const take = Math.min(n, left.length);
+  // drawing k of the remaining uniformly has expected value k × mean, so
+  // charging the current mean per capsule is exactly fair for any batch
+  const price = capsulePrice(m);
+  return { n: take, totalUsd: +(take * price).toFixed(2), priceUsd: price };
+}
 
 export function machineManifest(m: Machine): string {
   return JSON.stringify({
@@ -47,25 +97,29 @@ export function machineManifest(m: Machine): string {
     rolledInUsd: m.rolledInUsd,
     rules: [
       "each open: draw = sha256(machineId|txSig|blockhash of the open's confirmation slot), rejection-sampled over the REMAINING pool in original array order",
+      "price floats: a capsule always costs (value still in the rack) / (capsules still in the rack), so every capsule is a fair bet when bought",
       "the machine runs until every capsule is opened; no prize ends it early",
       "if it is ever closed with capsules unsold, unclaimed cards return to the vault and unclaimed cash rolls into the next machine",
-      "sum(prizes) == capsules * priceUsd + rolledInUsd — zero house edge",
+      "sum(prizes) == capsules * startPriceUsd + rolledInUsd — zero house edge",
     ],
   });
 }
 
 /**
- * Build an exact zero-edge prize table: the headline card + junk filler
- * cards (valued at cost) + cash envelopes. sum(prizes) == N*price +
- * rolledIn, EXACTLY — leftover cents land on one odd envelope.
+ * Build an exact zero-edge prize table: the card basket (chase first) +
+ * junk filler (valued at cost) + cash envelopes. sum(prizes) ==
+ * N*price + rolledIn, EXACTLY — leftover cents land on one odd envelope.
  */
-function buildPrizes(card: VaultCard, junk: VaultCard[], capsules: number, priceUsd: number, rolledInUsd: number): Prize[] | null {
+function buildPrizes(cards: VaultCard[], junk: VaultCard[], capsules: number, priceUsd: number, rolledInUsd: number): Prize[] | null {
   const totalC = Math.round(capsules * priceUsd * 100) + Math.round(rolledInUsd * 100);
-  const junkC = junk.reduce((s, j) => s + Math.round(j.compUsd * 100), 0);
-  let cashC = totalC - Math.round(card.compUsd * 100) - junkC;
-  const slots = capsules - 1 - junk.length; // cash envelopes; every capsule holds something
+  const cardsC = [...cards, ...junk].reduce((s, c) => s + Math.round(c.compUsd * 100), 0);
+  let cashC = totalC - cardsC;
+  const slots = capsules - cards.length - junk.length; // cash envelopes
   if (cashC < slots || slots < 1) return null;
-  const prizes: Prize[] = [{ kind: "card", nft: card.nft, valueUsd: card.compUsd, label: `THE CARD — ${card.itemName.slice(0, 60)}` }];
+  const prizes: Prize[] = cards.map((c, i) => ({
+    kind: "card" as const, nft: c.nft, valueUsd: c.compUsd,
+    label: `${i === 0 ? "THE CHASE" : "CARD"} — ${c.itemName.slice(0, 56)}`,
+  }));
   for (const j of junk)
     prizes.push({ kind: "card", nft: j.nft, valueUsd: j.compUsd, label: `CARD — ${j.itemName.slice(0, 50)}` });
   const n5 = Math.min(Math.floor((cashC * 0.25) / 500), Math.max(0, slots - 2));
@@ -90,66 +144,79 @@ function buildPrizes(card: VaultCard, junk: VaultCard[], capsules: number, price
   return prizes;
 }
 
-/** Keep one machine stocked from the vault (cheapest suitable card). */
+/** Keep one machine stocked from the vault — a BASKET of cards, not one. */
 export async function autoMachine(): Promise<void> {
   if (halted()) return;
   if (state.machines.some((m) => m.status === "open")) return;
-  const card = state.vault
+  const eligible = state.vault
     .filter((v) => v.status === "vault" && v.role !== "junk" && !suspectComp(v) && v.compUsd <= cfg.machineMaxCardUsd)
-    .sort((a, b) => a.compUsd - b.compUsd)[0];
-  if (!card) return;
-  await createMachine(card);
+    .sort((a, b) => a.compUsd - b.compUsd);
+  if (eligible.length < cfg.minCardsPerMachine) return; // wait for stock — a
+  // one-card machine is the high-variance shape we are avoiding
+  await createMachine(eligible.slice(0, cfg.cardsPerMachine));
 }
 
-export async function createMachine(card: VaultCard): Promise<Machine | null> {
+export async function createMachine(basket: VaultCard[]): Promise<Machine | null> {
+  if (!basket.length) return null;
   const priceUsd = cfg.capsuleUsd;
   const rolledIn = state.rolloverUsd;
+  // chase = the best card in the basket; it headlines the machine
+  const cards = [...basket].sort((a, b) => b.compUsd - a.compUsd);
+  const chase = cards[0];
   // junk filler: real (cheap) cards beat cash envelopes as theater — same EV,
   // and "you pulled a card" reads better than "you pulled 12¢"
   const junk = state.vault
     .filter((v) => v.role === "junk" && v.status === "vault")
     .sort((a, b) => a.compUsd - b.compUsd)
     .slice(0, cfg.junkPerMachine);
-  const junkValue = junk.reduce((s, j) => s + j.compUsd, 0);
-  // FLAT POOL: size the machine so the best card is at most maxCardShare of
-  // it. A pool one card can dominate is the negative-EV trap (see header).
+  const cardsValue = [...cards, ...junk].reduce((s, c) => s + c.compUsd, 0);
+  // size the machine so no single card exceeds maxCardShare of the pool —
+  // that share is what drives per-machine variance (see header)
   const capsules = Math.max(
-    junk.length + 2,
-    Math.ceil(card.compUsd / (priceUsd * cfg.maxCardShare)),
-    Math.ceil((card.compUsd + junkValue + rolledIn) / priceUsd),
+    cards.length + junk.length + 2,
+    Math.ceil(chase.compUsd / (priceUsd * cfg.maxCardShare)),
+    Math.ceil((cardsValue + rolledIn) / priceUsd),
   );
-  const prizes = buildPrizes(card, junk, capsules, priceUsd, rolledIn);
+  const prizes = buildPrizes(cards, junk, capsules, priceUsd, rolledIn);
   if (!prizes) return null;
   const id = crypto.randomBytes(6).toString("hex");
   const m: Machine = {
-    id, title: card.itemName, nft: card.nft, capsules, priceUsd, prizes,
+    id, title: chase.itemName, nft: chase.nft, capsules, priceUsd, prizes,
     opens: [], commitHash: "", status: "open",
     rolledInUsd: rolledIn, createdAt: Date.now(),
   };
   m.commitHash = crypto.createHash("sha256").update(machineManifest(m)).digest("hex");
   m.commitSig = await publishCommit(id, m.commitHash, 0); // slot 0 = "no future slot; per-open entropy"
   state.rolloverUsd = 0;
-  for (const v of [card, ...junk]) {
+  for (const v of [...cards, ...junk]) {
     v.machineId = id;
     v.status = "machined";
   }
   state.machines.push(m);
   save();
   ledger("machine-open", {
-    id, nft: card.nft, item: card.itemName, capsules, priceUsd,
-    cardValue: card.compUsd, junkCards: junk.length, junkValue: +junkValue.toFixed(2),
-    cashValue: +(capsules * priceUsd + rolledIn - card.compUsd - junkValue).toFixed(2),
+    id, nft: chase.nft, item: chase.itemName, capsules, startPriceUsd: priceUsd,
+    cards: cards.length, chaseUsd: chase.compUsd,
+    chaseShare: +(chase.compUsd / (capsules * priceUsd)).toFixed(3),
+    junkCards: junk.length, cardsValue: +cardsValue.toFixed(2),
+    cashValue: +(capsules * priceUsd + rolledIn - cardsValue).toFixed(2),
     rolledInUsd: rolledIn, commit: m.commitHash,
   });
-  log.info("capsule", `MACHINE ${id}: ${capsules} x $${priceUsd} — ${card.itemName.slice(0, 45)} ($${card.compUsd}) + ${junk.length} junk cards + cash${rolledIn ? ` (+$${rolledIn} rolled in)` : ""}`);
+  log.info("capsule", `MACHINE ${id}: ${capsules} capsules from $${priceUsd} — ${cards.length} cards (chase ${chase.itemName.slice(0, 34)} $${chase.compUsd}, ${(100 * chase.compUsd / (capsules * priceUsd)).toFixed(0)}% of rack) + ${junk.length} junk + cash${rolledIn ? ` (+$${rolledIn} rolled in)` : ""}`);
   return m;
 }
 
-/** Open capsules. txSig/slot/blockhash come from the payment tx in live mode. */
+/**
+ * Open capsules. txSig/slot/blockhash come from the payment tx in live
+ * mode; budgetUsd (what the buyer actually paid) then decides how many
+ * capsules that buys at the live price, which may have moved between the
+ * quote and the confirmation. Whatever is left over is refunded.
+ */
 export async function openCapsules(
   machineId: string, buyer: string, n: number,
   entropy?: { txSig: string; slot: number; blockhash: string },
-): Promise<{ ok: boolean; prizes?: Prize[]; why?: string }> {
+  budgetUsd?: number,
+): Promise<{ ok: boolean; prizes?: Prize[]; spentUsd?: number; why?: string }> {
   const m = state.machines.find((x) => x.id === machineId);
   if (!m || m.status !== "open") return { ok: false, why: "no open machine" };
   if (halted()) return { ok: false, why: "machine is paused" };
@@ -161,17 +228,24 @@ export async function openCapsules(
   // paper mode manufactures a fake sig but uses a REAL chain blockhash
   const e = entropy ?? { txSig: "paper-" + crypto.randomBytes(24).toString("hex"), ...(await latestBlock()) };
   const won: Prize[] = [];
+  let budget = budgetUsd ?? Infinity;
+  let spent = 0;
   for (let k = 0; k < n; k++) {
     left = remainingIdx();
     if (!left.length) break;
+    // the price is whatever the rack is worth at THIS capsule
+    const price = capsulePrice(m);
+    if (price > budget + 0.005) break; // paid amount exhausted
+    budget -= price;
+    spent += price;
     // multi-capsule opens chain the draw: k is appended so each capsule
     // in one tx gets an independent draw, still fully recomputable
     const pick = left[openIndex(m.id, `${e.txSig}:${k}`, e.blockhash, left.length)];
     const prize = m.prizes[pick];
     prize.claimedBy = buyer;
-    m.opens.push({ buyer, txSig: `${e.txSig}:${k}`, slot: e.slot, blockhash: e.blockhash, prizeIdx: pick, at: Date.now() });
+    m.opens.push({ buyer, txSig: `${e.txSig}:${k}`, slot: e.slot, blockhash: e.blockhash, prizeIdx: pick, priceUsd: price, at: Date.now() });
     won.push(prize);
-    if (!cfg.live) state.walletUsd += m.priceUsd;
+    if (!cfg.live) state.walletUsd += price;
     if (prize.kind === "cash") {
       if (cfg.live) queuePayout({ kind: "usdc", to: buyer, amountUsd: prize.valueUsd, raffleId: m.id, reason: `capsule prize ${prize.label}` });
       else state.walletUsd -= prize.valueUsd;
@@ -182,15 +256,16 @@ export async function openCapsules(
       if (cfg.live)
         queuePayout({ kind: "nft", to: buyer, nft: prize.nft!, raffleId: m.id, reason: prize.nft === m.nft ? "capsule headline card" : "capsule card prize" });
     }
-    ledger("capsule-open", { machine: m.id, buyer, prize: prize.label, valueUsd: prize.valueUsd, txSig: `${e.txSig}:${k}`, slot: e.slot, blockhash: e.blockhash, prizeIdx: pick });
+    ledger("capsule-open", { machine: m.id, buyer, paidUsd: price, prize: prize.label, valueUsd: prize.valueUsd, txSig: `${e.txSig}:${k}`, slot: e.slot, blockhash: e.blockhash, prizeIdx: pick });
   }
+  if (!won.length) return { ok: false, why: "payment below the current capsule price" };
   // NOTHING ends the machine early — it runs until the rack is empty. (A
   // jackpot that closes the machine is the negative-EV trap; see header.)
   if (!remainingIdx().length) closeMachine(m, "sold out");
   save();
   if (won.some((p) => p.kind === "card" && p.nft === m.nft))
-    log.info("capsule", `💥 CHASE CARD popped in ${m.id} → ${buyer}`);
-  return { ok: true, prizes: won };
+    log.info("capsule", `💥 CHASE CARD popped in ${m.id} → ${buyer} — price drops to $${capsulePrice(m).toFixed(2)}`);
+  return { ok: true, prizes: won, spentUsd: +spent.toFixed(2) };
 }
 
 function closeMachine(m: Machine, why: string): void {
@@ -209,7 +284,7 @@ function closeMachine(m: Machine, why: string): void {
   const rollover = +m.prizes.filter((p) => !p.claimedBy && p.kind === "cash").reduce((s, p) => s + p.valueUsd, 0).toFixed(2);
   m.rolledOutUsd = rollover;
   state.rolloverUsd = +(state.rolloverUsd + rollover).toFixed(2);
-  const proceeds = m.opens.length * m.priceUsd;
+  const proceeds = +m.opens.reduce((s, o) => s + (o.priceUsd ?? m.priceUsd), 0).toFixed(2);
   const cashPaid = m.prizes.filter((p) => p.claimedBy && p.kind === "cash").reduce((s, p) => s + p.valueUsd, 0);
   // only cards that actually shipped are a cost to this machine
   const cardsCost = cards.filter((v) => v.status === "awarded").reduce((s, v) => s + v.paidUsd, 0);
