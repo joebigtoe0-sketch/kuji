@@ -28,26 +28,19 @@ export async function purgeDemo(): Promise<PurgeResult> {
   const out: PurgeResult = { raffles: 0, machines: 0, listings: 0, cards: 0, kept: 0 };
   const demoRaffleIds = new Set<string>();
 
-  for (const r of state.raffles) {
-    if (r.commitSig) continue;                  // published on-chain = real
-    if (r.status === "open") {
-      r.status = "refunded";                    // nothing was ever paid; just close it
-      demoRaffleIds.add(r.id);
-      out.raffles++;
-    }
-  }
-  for (const m of state.machines) {
-    if (m.commitSig || m.status !== "open") continue;
-    m.status = "closed";
-    m.closedAt = Date.now();
-    out.machines++;
-  }
-  for (const l of state.market) {
-    if (l.status === "open" && (demoRaffleIds.has(l.raffleId) || !state.raffles.find((r) => r.id === l.raffleId)?.commitSig)) {
-      l.status = "cancelled";
-      out.listings++;
-    }
-  }
+  // DELETE rather than close. Marking a demo raffle "refunded" still leaves
+  // it on the public page, and "refunded" reads as though real people were
+  // paid back — which never happened, because no real money was ever in it.
+  // The ledger keeps the record; the storefront should show nothing.
+  for (const r of state.raffles) if (!r.commitSig) demoRaffleIds.add(r.id);
+  out.raffles = state.raffles.filter((r) => !r.commitSig).length;
+  state.raffles = state.raffles.filter((r) => !!r.commitSig);
+
+  out.machines = state.machines.filter((m) => !m.commitSig).length;
+  state.machines = state.machines.filter((m) => !!m.commitSig);
+
+  out.listings = state.market.filter((l) => demoRaffleIds.has(l.raffleId)).length;
+  state.market = state.market.filter((l) => !demoRaffleIds.has(l.raffleId));
 
   // vault: keep only what we actually hold on chain
   const keep = [];

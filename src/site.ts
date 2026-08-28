@@ -6,6 +6,7 @@ import { indexStats } from "./comps.js";
 import { marketFor } from "./market.js";
 import { capsulePrice, remainingPrizes } from "./capsules.js";
 import { brand } from "./brand.js";
+import { isReal } from "./purge.js";
 
 /**
  * The machine's storefront — TCG identity: Pokemon-logo type treatment
@@ -282,6 +283,11 @@ const ago = (t: number) => {
   return m < 60 ? `${Math.round(m)}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
 };
 
+// Belt and braces: even before a purge runs, a live storefront must never
+// display something with no on-chain commit behind it.
+const shownRaffles = () => state.raffles.filter(isReal);
+const shownMachines = () => state.machines.filter(isReal);
+
 function shell(title: string, body: string, ticker?: string): string {
   const b = brand();
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -300,7 +306,7 @@ ${b.og ? `<meta property="og:image" content="${b.og}"><meta name="twitter:image"
   <a class="wordmark" href="/">${b.wordmark
     ? `<img class="wmimg" src="${b.wordmark}" alt="KUJI">`
     : `${b.logo ? `<img class="wmark" src="${b.logo}" alt="">` : ""}KU<b>JI</b>`}</a>
-  <nav>${(() => { const m = state.machines.find((x) => x.status === "open"); return m ? `<a href="/machine/${m.id}" style="color:var(--signal)">Candy Machine</a>` : ""; })()}<a href="/raffles">Raffles</a><a href="/vault">The Vault</a><a href="/grades">Receipts</a><a href="/feed">Live Feed</a></nav>
+  <nav>${(() => { const m = shownMachines().find((x) => x.status === "open"); return m ? `<a href="/machine/${m.id}" style="color:var(--signal)">Candy Machine</a>` : ""; })()}<a href="/raffles">Raffles</a><a href="/vault">The Vault</a><a href="/grades">Receipts</a><a href="/feed">Live Feed</a></nav>
   <div style="display:flex;gap:14px;align-items:center">
     ${cfg.xUrl ? `<a class="xlink" href="${cfg.xUrl}" target="_blank" rel="noopener" aria-label="X">𝕏</a>` : ""}
     ${cfg.live ? `<span class="livetag">● LIVE${cfg.devnet ? " · DEVNET" : ""}</span>` : `<span class="papertag">● PAPER MODE</span>`}
@@ -397,8 +403,8 @@ export function mountSite(app: express.Express): void {
   const cardOf = (nft: string) => state.vault.find((v) => v.nft === nft);
 
   app.get("/", (_req, res) => {
-    const live = state.raffles.filter((r) => r.status === "open");
-    const done = state.raffles.filter((r) => r.status === "resolved").slice(-6).reverse();
+    const live = shownRaffles().filter((r) => r.status === "open");
+    const done = shownRaffles().filter((r) => r.status === "resolved").slice(-6).reverse();
     const vaultLive = state.vault.filter((v) => v.status === "vault" || v.status === "raffled");
     const fan = state.vault.filter((v) => v.image).slice(-3);
     const tick = ledgerTail(14).reverse().map((e: any) =>
@@ -428,7 +434,7 @@ export function mountSite(app: express.Express): void {
 </section>
 
 ${(() => {
-  const m = state.machines.find((x) => x.status === "open") ?? [...state.machines].reverse()[0];
+  const m = shownMachines().find((x) => x.status === "open") ?? [...shownMachines()].reverse()[0];
   return m ? `<section>
   <h2>THE CANDY<br><i>MACHINE.</i></h2>
   <p class="side">PRICE = WHAT THE RACK IS WORTH, LIVE · THE WHOLE POOL IS PUBLIC · BUY IT ALL AND YOU GET IT ALL BACK</p>
@@ -470,7 +476,7 @@ ${done.length ? `<section>
   });
 
   app.get("/raffles", (_req, res) => {
-    const rs = [...state.raffles].reverse();
+    const rs = [...shownRaffles()].reverse();
     res.type("html").send(shell("raffles", `
 <section>
   <h2>ALL <i>RAFFLES.</i></h2>
