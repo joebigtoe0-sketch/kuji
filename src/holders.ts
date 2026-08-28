@@ -1,4 +1,4 @@
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { cfg } from "./config.js";
 import { connection, walletPk } from "./wallet.js";
@@ -105,6 +105,45 @@ async function balancesByOwner(mint: string): Promise<Map<string, number>> {
   return viaProgramAccounts(mint);
 }
 
+/**
+ * Drop anything that is not a real person's wallet.
+ *
+ * A bonding curve, an AMM pool and a program vault all hold tokens, so a
+ * naive balance scan counts them as holders — and the curve alone can be
+ * a large share of supply. If one of them "wins", the prize is sent to a
+ * program-derived address that nobody can sign for, and the card is gone
+ * for good.
+ *
+ * The test is ownership of the wallet account itself: a human wallet is
+ * owned by the System Program. A curve/pool authority is a PDA owned by
+ * the launchpad or AMM program. Accounts that do not exist yet are kept —
+ * that is just a wallet that has never held SOL.
+ */
+async function keepOnlyRealWallets(balances: Map<string, number>): Promise<{ kept: Map<string, number>; dropped: { wallet: string; balance: number; owner: string }[] }> {
+  const wallets = [...balances.keys()];
+  const dropped: { wallet: string; balance: number; owner: string }[] = [];
+  const kept = new Map(balances);
+  for (let i = 0; i < wallets.length; i += 100) {
+    const chunk = wallets.slice(i, i + 100);
+    let infos;
+    try {
+      infos = await connection.getMultipleAccountsInfo(chunk.map((w) => new PublicKey(w)));
+    } catch (e) {
+      log.warn("holders", `could not classify wallets, keeping them all: ${String(e).slice(0, 90)}`);
+      return { kept, dropped };
+    }
+    infos.forEach((info, k) => {
+      if (!info) return;                                   // never funded — still a person
+      const ownedBySystem = info.owner.equals(SystemProgram.programId);
+      if (ownedBySystem && !info.executable) return;       // a real wallet
+      const w = chunk[k];
+      dropped.push({ wallet: w, balance: balances.get(w) ?? 0, owner: info.owner.toBase58() });
+      kept.delete(w);
+    });
+  }
+  return { kept, dropped };
+}
+
 let cache: { at: number; holders: Holder[] } | undefined;
 
 /** Balance-weighted holder list, ANSEM boost applied. Cached 5 min. */
@@ -117,7 +156,7 @@ export async function snapshotHolders(): Promise<Holder[]> {
  * "no holders" and "the RPC refused the query" need different fixes and
  * used to be reported identically.
  */
-export async function holderReport(): Promise<{ holders: Holder[]; why?: string; raw?: number }> {
+export async function holderReport(): Promise<{ holders: Holder[]; why?: string; raw?: number; excluded?: { wallet: string; balance: number; owner: string }[] }> {
   if (!cfg.live) return { holders: [], why: "paper mode — holder snapshots only run live" };
   if (!cfg.tokenMint) return { holders: [], why: "no token mint set. Paste the token CA in the settings above." };
   if (cache && Date.now() - cache.at < 5 * 60_000) return { holders: cache.holders };
@@ -127,6 +166,14 @@ export async function holderReport(): Promise<{ holders: Holder[]; why?: string;
   } catch (e) {
     return { holders: [], why: `could not read holders from the RPC: ${String(e).slice(0, 160)}` };
   }
+  // strip bonding curves, AMM pools and program vaults BEFORE weighting
+  const { kept, dropped } = await keepOnlyRealWallets(token);
+  if (dropped.length) {
+    const share = dropped.reduce((s2, d) => s2 + d.balance, 0);
+    const all = [...token.values()].reduce((s2, v) => s2 + v, 0) || 1;
+    log.info("holders", `excluded ${dropped.length} non-wallet holder(s) worth ${(100 * share / all).toFixed(1)}% of supply (curve/pool/program)`);
+  }
+  token = kept;
   const ansem = cfg.ansemMint ? await balancesByOwner(cfg.ansemMint).catch(() => new Map<string, number>()) : new Map<string, number>();
   const holders: Holder[] = [];
   for (const [wallet, balance] of token) {
@@ -135,14 +182,14 @@ export async function holderReport(): Promise<{ holders: Holder[]; why?: string;
     holders.push({ wallet, balance: boosted });
   }
   cache = { at: Date.now(), holders };
-  log.info("holders", `snapshot: ${holders.length} holders (${token.size} raw)`);
+  log.info("holders", `snapshot: ${holders.length} holders (${token.size} real wallets, ${dropped.length} program accounts excluded)`);
   if (!holders.length) {
     return {
-      holders, raw: token.size,
+      holders, raw: token.size, excluded: dropped,
       why: token.size === 0
         ? "the mint has no token accounts with a balance — is the token actually launched, and is the CA correct?"
         : `found ${token.size} token account(s), but all were excluded (the machine's own wallet, or EXCLUDE_WALLETS)`,
     };
   }
-  return { holders, raw: token.size };
+  return { holders, raw: token.size, excluded: dropped };
 }

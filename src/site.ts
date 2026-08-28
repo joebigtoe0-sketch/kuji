@@ -897,9 +897,12 @@ $('livebtn').onclick=async()=>{
 $('chkholders').onclick=async()=>{
   $('hmsg').textContent='reading the chain…';
   const j=await (await fetch('/api/admin/holders',{headers:hdr()})).json();
+  const exc=(j.excluded||[]).length
+    ? ' | EXCLUDED '+j.excluded.length+' program account(s) (curve/pool): '+j.excluded.map(e=>e.wallet.slice(0,6)+'…').join(', ')
+    : ' | no program accounts found';
   $('hmsg').textContent = j.holders
-    ? (j.holders+' holders eligible (from '+j.rawAccounts+' token accounts). Top: '+j.top.map(t=>t.wallet.slice(0,6)+'… '+Math.round(t.balance)).join(', '))
-    : ('0 holders — '+(j.why||'unknown')+(j.tokenMint?' [CA '+j.tokenMint.slice(0,8)+'…]':' [no CA set]'));
+    ? (j.holders+' real wallets eligible (from '+j.rawAccounts+' token accounts). Top: '+j.top.map(t=>t.wallet.slice(0,6)+'… '+Math.round(t.balance)).join(', ')+exc)
+    : ('0 holders — '+(j.why||'unknown')+(j.tokenMint?' [CA '+j.tokenMint.slice(0,8)+'…]':' [no CA set]')+exc);
 };
 $('purgebtn').onclick=async()=>{
   if(!confirm('Clear all paper-mode raffles, machines and listings?'))return;

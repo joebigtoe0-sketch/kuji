@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, SystemProgram } from "@solana/web3.js";
 import {
   getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction,
   createTransferCheckedInstruction, getMint,
@@ -68,11 +68,36 @@ async function sendUsdc(to: string, amountUsd: number, label: string): Promise<s
 // CC cards come in all three; see assets.ts
 const sendNft = (to: string, nft: string, _label: string) => transferAsset(nft, to);
 
+/**
+ * Refuse to send anything to an address nobody can sign for.
+ *
+ * A bonding curve or AMM pool holding tokens looks like a holder. If one
+ * ever wins, transferring the prize to its program-derived address puts
+ * the card somewhere with no private key: unrecoverable. Better a loud
+ * stuck payout a human resolves than a card burned in public.
+ */
+async function isProgramOwned(addr: string): Promise<boolean> {
+  try {
+    const info = await connection.getAccountInfo(new PublicKey(addr));
+    if (!info) return false;                       // unfunded wallet, fine
+    return !info.owner.equals(SystemProgram.programId) || info.executable;
+  } catch {
+    return false;                                   // can't tell — don't block on a hiccup
+  }
+}
+
 /** Work the queue — on a timer. One payout per tick keeps failure blast radius small. */
 export async function tickPayouts(): Promise<void> {
   if (!cfg.live || halted()) return;
   const p = q.find((x) => x.status === "queued");
   if (!p) return;
+  if (await isProgramOwned(p.to)) {
+    p.status = "stuck";
+    ledger("payout-BLOCKED", { kind: p.kind, to: p.to, amountUsd: p.amountUsd, nft: p.nft, raffle: p.raffleId, why: "recipient is a program-owned address (bonding curve / pool / PDA) — sending there would destroy the prize" });
+    log.warn("payout", `BLOCKED: ${p.to} is program-owned, not a wallet. ${p.kind} payout held for review — nobody can sign for that address.`);
+    persist();
+    return;
+  }
   try {
     p.sig = p.kind === "usdc"
       ? await sendUsdc(p.to, p.amountUsd!, `refund $${p.amountUsd} → ${p.to.slice(0, 8)} (${p.reason})`)

@@ -223,6 +223,7 @@ app.get("/api/admin/holders", async (req, res) => {
   res.json({
     ok: true, tokenMint: cfg.tokenMint || null, live: cfg.live,
     holders: rep.holders.length, rawAccounts: rep.raw ?? 0, why: rep.why ?? null,
+    excluded: (rep.excluded ?? []).map((e) => ({ wallet: e.wallet, balance: Math.round(e.balance), ownedBy: e.owner })),
     top: rep.holders.sort((a, b) => b.balance - a.balance).slice(0, 5)
       .map((h) => ({ wallet: h.wallet, balance: h.balance })),
   });
