@@ -7,6 +7,7 @@ import { marketFor } from "./market.js";
 import { capsulePrice, remainingPrizes } from "./capsules.js";
 import { brand } from "./brand.js";
 import { isReal } from "./purge.js";
+import { results } from "./results.js";
 
 /**
  * The machine's storefront — TCG identity: Pokemon-logo type treatment
@@ -748,6 +749,35 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
   });
 
   app.get("/grades", (_req, res) => {
+    // Live and paper answer different questions, and conflating them is how
+    // a page ends up publishing a success rate it did not earn.
+    if (cfg.live) {
+      const { cards, spent, returned, open } = results();
+      const net = +(returned - spent).toFixed(2);
+      const rows = cards.map((c) => `
+<tr><td>${c.item.slice(0, 46)}</td><td>${usd(c.paidUsd)}</td><td class="dim">${usd(c.compUsd)}</td>
+<td class="${c.state === "in the vault" ? "dim" : "amber"}">${c.state}</td>
+<td>${c.returnedUsd === null ? '<span class="dim">not yet</span>' : usd(c.returnedUsd)}</td>
+<td class="dim">${c.detail}</td></tr>`).join("");
+      return res.type("html").send(shell("receipts", `
+<section>
+  <h2>WHAT EVERY CARD<br><i>ACTUALLY RETURNED.</i></h2>
+  <p class="side">REAL MONEY IN, REAL MONEY OUT — NOTHING HERE IS A SIMULATION</p>
+  <div class="statgrid">
+    <div class="stat"><small>spent on cards</small><b>${usd(spent)}</b></div>
+    <div class="stat"><small>returned so far</small><b>${usd(returned)}</b></div>
+    <div class="stat"><small>net</small><b class="${net >= 0 ? "up" : "down"}">${net >= 0 ? "+" : ""}${usd(net)}</b></div>
+    <div class="stat"><small>still unresolved</small><b>${open}</b></div>
+    <div class="stat"><small>holder pool</small><b>${usd(state.holderPoolUsd)}</b></div>
+  </div>
+  <p class="dim" style="font-size:13px;margin-bottom:20px">A card that has not been raffled or racked yet
+  shows <b>not yet</b>, not zero. Holder drops are free by design: they are funded out of profit and are
+  meant to return nothing.</p>
+  <table class="inst"><tr><th>card</th><th>paid</th><th>comp</th><th>where it is</th><th>returned</th><th>detail</th></tr>
+  ${rows || `<tr><td colspan="6" class="dim">no cards yet — the sniper is looking</td></tr>`}</table>
+</section>`));
+    }
+
     const gs = gradeStats();
     const rows = [...grades()].reverse().slice(0, 100).map((g) => `
 <tr><td>${g.item.slice(0, 48)}</td><td>${usd(g.paidUsd)}</td><td>${usd(g.compUsd)}</td>
@@ -756,7 +786,7 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
     res.type("html").send(shell("receipts", `
 <section>
   <h2>DID THE EDGES<br><i>TURN OUT REAL?</i></h2>
-  <p class="side">PAPER BUYS LEAVE THE REAL LISTING ON THE MARKET — ITS FATE IS THE EXPERIMENT</p>
+  <p class="side">PAPER MODE — THE MACHINE DID NOT BUY, SO THE LISTING'S FATE IS THE EXPERIMENT</p>
   <div class="statgrid">
     <div class="stat"><small>graded</small><b>${gs.graded}</b></div>
     <div class="stat"><small>taken (validated)</small><b class="up">${gs.taken}</b></div>

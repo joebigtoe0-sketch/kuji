@@ -32,6 +32,12 @@ export function grades(): Grade[] {
 }
 
 export async function gradeVault(): Promise<void> {
+  // PAPER ONLY, and this is not a detail. The whole method is "we did not
+  // actually buy it, so watch what happens to the listing". Live, WE are
+  // the reason the listing vanished — so the staleness test would score
+  // every real buy as "taken: validated" and publish a fabricated success
+  // rate. Live results come from what cards actually return; see results().
+  if (cfg.live) return;
   const st: any = state;
   st.grades = st.grades ?? [];
   const gradedNfts = new Set(st.grades.map((g: Grade) => g.nft));
