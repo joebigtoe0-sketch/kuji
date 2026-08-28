@@ -76,16 +76,23 @@ npm run typecheck    # before committing
    | `DAS_URL` | DAS-capable RPC (Helius). Required in live mode: some cards are compressed NFTs, which have no on-chain account to read. |
    | `LIVE_MODE` | leave unset. Flip live from `/admin` once the wallet is funded — it applies immediately, no redeploy. |
 
-4. **Own the wallet key.** Two ways to get one, and the choice matters:
+4. **Make the wallet up front**, so the key exists somewhere you control rather than only on a
+   server disk:
 
-   - **Recommended — bring your own.** Create a fresh wallet in Phantom (or
-     `solana-keygen new`), export the private key, and set it as `WALLET_SECRET`.
-     `WALLET_SECRET` takes either format: base58 (what Phantom exports) or a JSON byte
-     array (what solana-keygen writes). You keep a backup, and you can open the wallet in
-     Phantom any time to watch it or rescue funds by hand.
-   - **Or let it generate one** on the volume and never set `WALLET_SECRET`. Simpler, but
-     the key exists in exactly one place: that disk. Lose or recreate the volume and the
-     funds are gone permanently.
+   ```bash
+   npm run newwallet
+   ```
+
+   It prints the **public address** and writes the private key to `data/WALLET-SECRET.txt` —
+   never to the terminal, because anything echoed there lives on in scrollback, shell history
+   and screen shares. Copy that one line into Railway as `WALLET_SECRET`, import the same key
+   into Phantom if you want to watch the wallet or move funds by hand, back it up in a password
+   manager, then delete the file. After deploying, check that `/admin` shows the same address
+   and reports its key source as `WALLET_SECRET` — that is your proof the right key loaded.
+
+   (You can skip this and let the app generate one on the volume instead, but then the key
+   exists in exactly one place: that disk. Lose or recreate the volume and the funds are gone
+   permanently.)
 
    Use a **fresh** wallet either way — this is a hot key living on a server, not somewhere to
    point an existing wallet. `/admin` shows which source the running key came from.
