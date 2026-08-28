@@ -19,13 +19,26 @@ import { log } from "./log.js";
 
 export const connection = new Connection(cfg.rpcUrl, "confirmed");
 
+/** Where the key came from — surfaced at boot and in /admin, never the key itself. */
+export let walletSource: "env" | "disk" | "generated" = "generated";
+
 function loadKeypair(): Keypair {
   const s = cfg.walletSecret.trim();
-  if (s.startsWith("[")) return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(s)));
-  if (s) return Keypair.fromSecretKey(bs58.decode(s));
+  // WALLET_SECRET accepts both shapes: a JSON byte array (solana-keygen) and
+  // base58 (what Phantom's "export private key" gives you).
+  if (s.startsWith("[")) {
+    walletSource = "env";
+    return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(s)));
+  }
+  if (s) {
+    walletSource = "env";
+    return Keypair.fromSecretKey(bs58.decode(s));
+  }
   const f = path.join(cfg.dataDir, "wallet.json");
   try {
-    return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(f, "utf8"))));
+    const kp = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(f, "utf8"))));
+    walletSource = "disk";
+    return kp;
   } catch {
     const kp = Keypair.generate();
     fs.writeFileSync(f, JSON.stringify(Array.from(kp.secretKey)));

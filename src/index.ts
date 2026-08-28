@@ -16,7 +16,7 @@ import { listTickets, cancelListing, fillListing, marketFor, tickMarket } from "
 import { tickPayouts, pendingPayouts, stuckPayouts } from "./payouts.js";
 import { snapshotHolders } from "./holders.js";
 import { halted, setHalt } from "./halt.js";
-import { walletPk, solBalance, usdcBalance } from "./wallet.js";
+import { walletPk, solBalance, usdcBalance, walletSource } from "./wallet.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -156,6 +156,7 @@ app.get("/api/admin/status", async (req, res) => {
     openRaffles: state.raffles.filter((r) => r.status === "open").length,
     openMachine: state.machines.some((m) => m.status === "open"),
     wallet: walletPk.toBase58(),
+    walletSource, // "env" = WALLET_SECRET (you hold a backup) | "disk" = volume only | "generated" = brand new THIS boot
     sol: await solBalance().catch(() => -1),
     usdc: await usdcBalance().catch(() => -1),
     payouts: { pending: pendingPayouts().length, stuck: stuckPayouts() },
@@ -256,6 +257,6 @@ if (cfg.live && !cfg.adminKey) {
 }
 
 app.listen(cfg.port, process.env.HOST ?? (deployed ? "0.0.0.0" : "127.0.0.1"), () => {
-  log.info("kuji", `${cfg.live ? (cfg.devnet ? "LIVE (devnet)" : "LIVE (MAINNET)") : "paper"} machine on port ${cfg.port} — wallet ${walletPk.toBase58()}, vault ${state.vault.length} cards${halted() ? " — ⚠ HALTED" : ""}`);
+  log.info("kuji", `${cfg.live ? (cfg.devnet ? "LIVE (devnet)" : "LIVE (MAINNET)") : "paper"} machine on port ${cfg.port} — wallet ${walletPk.toBase58()} (from ${walletSource}), vault ${state.vault.length} cards${halted() ? " — ⚠ HALTED" : ""}`);
   save();
 });

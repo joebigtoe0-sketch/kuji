@@ -76,11 +76,29 @@ npm run typecheck    # before committing
    | `DAS_URL` | DAS-capable RPC (Helius). Required in live mode: some cards are compressed NFTs, which have no on-chain account to read. |
    | `LIVE_MODE` | leave unset. Flip live from `/admin` once the wallet is funded — it applies immediately, no redeploy. |
 
-4. **Fund the wallet.** Its address is shown in `/admin`. It needs USDC to snipe with and a little
-   SOL for fees. With an empty wallet, live mode simply idles.
+4. **Own the wallet key.** Two ways to get one, and the choice matters:
 
-5. **Go live from `/admin`**, where you also set the token contract address and X link, and where
+   - **Recommended — bring your own.** Create a fresh wallet in Phantom (or
+     `solana-keygen new`), export the private key, and set it as `WALLET_SECRET`.
+     `WALLET_SECRET` takes either format: base58 (what Phantom exports) or a JSON byte
+     array (what solana-keygen writes). You keep a backup, and you can open the wallet in
+     Phantom any time to watch it or rescue funds by hand.
+   - **Or let it generate one** on the volume and never set `WALLET_SECRET`. Simpler, but
+     the key exists in exactly one place: that disk. Lose or recreate the volume and the
+     funds are gone permanently.
+
+   Use a **fresh** wallet either way — this is a hot key living on a server, not somewhere to
+   point an existing wallet. `/admin` shows which source the running key came from.
+
+5. **Fund it.** The address is in `/admin`. It needs USDC to snipe with and a little SOL for
+   fees. With an empty wallet, live mode simply idles.
+
+6. **Go live from `/admin`**, where you also set the token contract address and X link, and where
    the halt switch lives.
+
+Note that a volume is required **regardless** of how you supply the key: `data/` also holds
+`seeds.txt`, and losing those makes any open raffle impossible to resolve — the seed is what proves
+the published commitment.
 
 ## Safety rails
 

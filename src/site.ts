@@ -781,6 +781,9 @@ async function refresh(){
     ['mode', st.live?(st.devnet?'LIVE — devnet':'🔴 LIVE — MAINNET'):'paper'],
     ['halted', st.halted?'YES — nothing buys or pays':'no'],
     ['wallet', st.wallet],
+    ['key source', st.walletSource==='env'?'WALLET_SECRET — you hold a backup'
+      :st.walletSource==='disk'?'⚠ volume only — no backup outside this disk'
+      :'⚠⚠ GENERATED THIS BOOT — nothing was on disk'],
     ['SOL / USDC', st.sol+' / $'+st.usdc],
     ['vault / raffles / machine', st.vault+' cards / '+st.openRaffles+' open / '+(st.openMachine?'running':'none')],
     ['bootstrap mode', st.bootstrap?'ON — cheap cards clear a relaxed edge bar':'off — full edge bar only'],
