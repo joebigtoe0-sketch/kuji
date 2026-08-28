@@ -19,7 +19,7 @@ import { halted, setHalt } from "./halt.js";
 import { walletPk, solBalance, usdcBalance, walletSource } from "./wallet.js";
 import { hasDas, ownsAsset, assetInfo } from "./assets.js";
 import { purgeDemo } from "./purge.js";
-import { createHolderRaffle } from "./raffles.js";
+import { createHolderRaffle, totalEntries } from "./raffles.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -317,15 +317,14 @@ app.get("/api/verify/:id", (req, res) => {
   if (!r) return res.status(404).json({ ok: false, why: "no such raffle" });
   if (r.status !== "resolved" || !r.seed || !r.blockhash)
     return res.json({ ok: false, why: "not resolved yet", status: r.status, commitHash: r.commitHash, resolveSlot: r.resolveSlot });
-  const owners: string[] = [];
-  for (const t of r.sold) for (let i = 0; i < t.n; i++) owners.push(t.buyer);
+  const total = totalEntries(r.sold);
   const winnerIndex = r.winnerIndex ?? -1;
   // recompute from published data only
   const manifest = r.kind === "paid"
     ? JSON.stringify({ id: r.id, nft: r.nft, item: r.title, tickets: r.tickets, ticketUsd: r.ticketUsd, rule: "resolves only if sold out by deadline; else refund" })
     : null;
   const check = manifest
-    ? verify({ manifestJson: manifest, seed: r.seed, resolveSlot: r.resolveSlot, commitHash: r.commitHash, blockhash: r.blockhash, total: owners.length, claimedWinnerIndex: winnerIndex })
+    ? verify({ manifestJson: manifest, seed: r.seed, resolveSlot: r.resolveSlot, commitHash: r.commitHash, blockhash: r.blockhash, total, claimedWinnerIndex: winnerIndex })
     : { ok: true, why: "holder manifest embeds full snapshot — see ledger" };
   res.json({ raffle: r.id, status: r.status, commitHash: r.commitHash, seed: r.seed, resolveSlot: r.resolveSlot, blockhash: r.blockhash, winner: r.winner, verified: check });
 });

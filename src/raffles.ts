@@ -72,6 +72,26 @@ export async function autoRaffle(): Promise<void> {
  * that comp — a bogus comp would mean overpriced tickets sold to real
  * people. Suspect cards sit in the vault until a human re-prices them.
  */
+/**
+ * Who holds ticket index `idx`?
+ *
+ * Walks cumulative counts instead of materialising the ticket list. A
+ * balance-weighted holder raffle can have HUNDREDS OF MILLIONS of entries
+ * (one per whole token held), and flattening that into an array of buyer
+ * strings exhausts memory and takes the process down at resolve time —
+ * which is exactly when a live raffle must not fail.
+ */
+export function ownerAtIndex(sold: { buyer: string; n: number }[], idx: number): string | undefined {
+  let acc = 0;
+  for (const t of sold) {
+    acc += t.n;
+    if (idx < acc) return t.buyer;
+  }
+  return undefined;
+}
+
+export const totalEntries = (sold: { n: number }[]): number => sold.reduce((s, t) => s + t.n, 0);
+
 export function suspectComp(v: VaultCard): boolean {
   if (v.compUsd <= 0 || v.paidUsd <= 0) return true;
   const edge = (v.compUsd - v.paidUsd) / v.compUsd;
@@ -148,11 +168,9 @@ export async function tickRaffles(): Promise<void> {
     if (!seed) { log.warn("raffle", `${r.id}: seed missing!`); continue; }
     try {
       const { blockhash } = await blockhashAtOrAfter(r.resolveSlot);
-      // flatten tickets into an indexed list: buyer of index i
-      const owners: string[] = [];
-      for (const t of r.sold) for (let i = 0; i < t.n; i++) owners.push(t.buyer);
-      const idx = winningIndex(seed, blockhash, owners.length);
-      r.winner = owners[idx];
+      const total = totalEntries(r.sold);
+      const idx = winningIndex(seed, blockhash, total);
+      r.winner = ownerAtIndex(r.sold, idx);
       r.winnerIndex = idx;
       r.seed = seed;
       r.blockhash = blockhash;
@@ -174,11 +192,11 @@ export async function tickRaffles(): Promise<void> {
       // the prize: the NFT goes to the winner's wallet (live buyers ARE wallets).
       // Physical redemption is theirs via Collector Crypt's vault afterwards.
       if (cfg.live && r.winner)
-        queuePayout({ kind: "nft", to: r.winner, nft: r.nft, raffleId: r.id, reason: `raffle prize (ticket ${idx + 1}/${owners.length})` });
+        queuePayout({ kind: "nft", to: r.winner, nft: r.nft, raffleId: r.id, reason: `raffle prize (ticket ${idx + 1}/${total})` });
       r.revealSig = await publishReveal(r.id, seed, blockhash, idx);
       save();
-      ledger("raffle-resolve", { raffle: r.id, winner: r.winner, winnerIndex: idx, of: owners.length, blockhash, seedRevealed: seed, revealSig: r.revealSig });
-      log.info("raffle", `RESOLVED ${r.id} — winner ${r.winner} (ticket ${idx + 1}/${owners.length})`);
+      ledger("raffle-resolve", { raffle: r.id, winner: r.winner, winnerIndex: idx, of: total, blockhash, seedRevealed: seed, revealSig: r.revealSig });
+      log.info("raffle", `RESOLVED ${r.id} — winner ${r.winner} (ticket ${idx + 1}/${total})`);
     } catch (e) {
       log.warn("raffle", `${r.id} resolve: ${String(e).slice(0, 100)}`);
     }
