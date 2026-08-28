@@ -353,7 +353,9 @@ function prodCard(r: any, card: any): string {
     <h3>${r.title.slice(0, 52)}</h3>
     <div class="meta">
       <div class="px">${r.kind === "paid" ? usd(r.ticketUsd) : "FREE"}<small>${r.kind === "paid" ? "per ticket" : "hold to enter"}</small></div>
-      <div class="left">${sold}/${r.tickets}<br>tickets</div>
+      <div class="left">${r.kind === "holder"
+        ? `${r.sold.length}<br>holder${r.sold.length === 1 ? "" : "s"} in`
+        : `${sold}/${r.tickets}<br>tickets`}</div>
     </div>
     <div class="fill ${r.status === "resolved" ? "done" : ""}"><i style="width:${pct}%"></i></div>
     ${r.winner ? `<div class="winline">🏆 ${r.winner} — verified draw</div>` : ""}
@@ -506,9 +508,25 @@ ${done.length ? `<section>
       <p style="font:600 11px var(--lab);letter-spacing:.08em;text-transform:uppercase;opacity:.7">comp basis: ${card.compBasis}</p>` : ""}
       <div class="duel" style="margin-top:14px">
         <div><small>ticket</small><b>${r.kind === "paid" ? usd(r.ticketUsd) : "FREE"}</b></div>
-        <div><small>sold</small><b>${sold}/${r.tickets}</b></div>
+        ${r.kind === "holder"
+          ? `<div><small>holders entered</small><b>${r.sold.length}</b></div>`
+          : `<div><small>sold</small><b>${sold}/${r.tickets}</b></div>`}
       </div>
-      <div class="fill ${r.status === "resolved" ? "done" : ""}" style="background:#10100a22"><i style="width:${pct}%"></i></div>
+      ${r.kind === "holder" ? (() => {
+        // Entries are one per whole token held, so the raw number runs to
+        // hundreds of millions and means nothing to a reader. Odds do.
+        const tot = r.sold.reduce((t, x) => t + x.n, 0) || 1;
+        const rows = [...r.sold].sort((a, b) => b.n - a.n).slice(0, 8).map((t) => `
+          <tr><td style="padding:5px 4px">${t.buyer.slice(0, 4)}…${t.buyer.slice(-4)}${r.winner === t.buyer ? " 🏆" : ""}</td>
+          <td style="padding:5px 4px;text-align:right"><b>${(100 * t.n / tot).toFixed(2)}%</b></td></tr>`).join("");
+        return `<div class="mkt" style="margin-top:16px">
+          <h4>ODDS BY HOLDER</h4>
+          <p class="imp">holding is the ticket — your chance is your share of supply</p>
+          <table>${rows}</table>
+          ${r.sold.length > 8 ? `<p class="dim" style="font-size:12px;margin-top:8px">+ ${r.sold.length - 8} more holder(s)</p>` : ""}
+        </div>`;
+      })() : ""}
+      ${r.kind === "paid" ? `<div class="fill ${r.status === "resolved" ? "done" : ""}" style="background:#10100a22"><i style="width:${pct}%"></i></div>` : ""}
       ${r.status === "open" && r.kind === "paid" ? `<p style="margin-top:14px;font:700 11px var(--lab);letter-spacing:.1em;text-transform:uppercase">
       fill deadline: <span id="cd" data-t="${r.fillDeadline}"></span> — no sellout, everyone refunded</p>` : ""}
       ${r.status === "open" && r.kind === "paid" && cfg.live ? `
