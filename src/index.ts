@@ -137,8 +137,9 @@ app.post("/api/admin/halt", (req, res) => {
 app.get("/api/admin/status", async (req, res) => {
   if (!admin(req)) return res.status(403).json({ ok: false });
   res.json({
-    live: cfg.live, devnet: cfg.devnet, halted: halted(),
+    live: cfg.live, devnet: cfg.devnet, halted: halted(), bootstrap: cfg.bootstrap,
     tokenMint: cfg.tokenMint, xUrl: cfg.xUrl,
+    junk: state.vault.filter((v) => v.role === "junk" && v.status === "vault").length,
     vault: state.vault.filter((v) => v.status === "vault").length,
     openRaffles: state.raffles.filter((r) => r.status === "open").length,
     openMachine: state.machines.some((m) => m.status === "open"),
@@ -159,6 +160,7 @@ app.post("/api/admin/settings", (req, res) => {
   if (typeof req.body?.tokenMint === "string") patch.tokenMint = req.body.tokenMint.trim();
   if (typeof req.body?.xUrl === "string") patch.xUrl = req.body.xUrl.trim();
   if (typeof req.body?.live === "boolean") patch.live = req.body.live;
+  if (typeof req.body?.bootstrap === "boolean") patch.bootstrap = req.body.bootstrap;
   const now = setRuntime(patch);
   if (!wasLive && cfg.live) {
     ledger("admin-LIVE", { at: Date.now(), wallet: walletPk.toBase58() });

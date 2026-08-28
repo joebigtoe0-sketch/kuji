@@ -19,7 +19,8 @@ export interface VaultCard {
   compBasis: string; // human-readable comp reasoning
   boughtAt: number;
   raffleId?: string; // assigned to a raffle
-  machineId?: string; // headline prize of a capsule machine
+  machineId?: string; // in a capsule machine (headline or junk filler)
+  role?: "junk"; // penny filler card — valued at cost, never raffled
   status: "vault" | "raffled" | "machined" | "awarded" | "holder_prize";
 }
 

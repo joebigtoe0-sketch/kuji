@@ -55,8 +55,10 @@ export async function scan(): Promise<void> {
       // one copy per card identity until the first one is graded out
       const idKey = `${l.itemName}|${l.gradingCompany}|${l.grade}`.toLowerCase();
       if (boughtIdentities.has(idKey)) continue;
-      if (edge < cfg.minEdge) {
-        if (edge > cfg.minEdge * 0.6)
+      // bootstrap: inventory beats edge — cheap cards clear a relaxed bar
+      const minEdge = cfg.bootstrap && l.priceUsd <= cfg.bootstrapMaxCardUsd ? cfg.bootstrapMinEdge : cfg.minEdge;
+      if (edge < minEdge) {
+        if (edge > minEdge * 0.6)
           ledger("near-miss", { nft: l.nft, item: l.itemName, price: l.priceUsd, comp: comp.compUsd, edge: +edge.toFixed(3), basis: comp.basis });
         continue;
       }
@@ -100,9 +102,53 @@ export async function scan(): Promise<void> {
       });
       log.info("sniper", `${cfg.live ? "LIVE" : "PAPER"} BUY ${l.itemName.slice(0, 60)} @ $${l.priceUsd} (comp $${comp.compUsd}, edge ${(edge * 100).toFixed(0)}%)`);
     }
+    const junk = cfg.bootstrap ? await junkPass(all) : 0;
     save();
-    log.info("sniper", `sweep: ${all.length} listings, index ${st.groups} groups/${st.rows} rows, ${considered} priced, ${buys} paper buys, wallet $${state.walletUsd.toFixed(2)}`);
+    log.info("sniper", `sweep: ${all.length} listings, index ${st.groups} groups/${st.rows} rows, ${considered} priced, ${buys} ${cfg.live ? "live" : "paper"} buys${junk ? `, ${junk} junk` : ""}, wallet $${state.walletUsd.toFixed(2)}`);
   } finally {
     scanning = false;
   }
+}
+
+/**
+ * The junk pass — penny cards for the capsule machine, NO edge required.
+ * A capsule that pops a real (worthless) card beats a 12¢ cash envelope:
+ * same EV, infinitely better theater. Valued at exactly what they cost,
+ * so the zero-edge math never lies.
+ */
+async function junkPass(all: Listing[]): Promise<number> {
+  const held = state.vault.filter((v) => v.role === "junk" && v.status === "vault").length;
+  const need = Math.min(cfg.junkTarget - held, cfg.junkBuysPerSweep);
+  if (need <= 0) return 0;
+  const ids = new Set(state.vault.map((v) => `${v.itemName}|${v.gradingCompany}|${v.grade}`.toLowerCase()));
+  const candidates = all
+    .filter((l) => l.priceUsd > 0 && l.priceUsd <= cfg.junkMaxUsd)
+    .filter((l) => !state.seenPaper.includes(l.nft) && !state.vault.some((v) => v.nft === l.nft))
+    .sort((a, b) => a.priceUsd - b.priceUsd);
+  let bought = 0;
+  for (const l of candidates) {
+    if (bought >= need) break;
+    const idKey = `${l.itemName}|${l.gradingCompany}|${l.grade}`.toLowerCase();
+    if (ids.has(idKey)) continue;
+    if (state.walletUsd < l.priceUsd) break;
+    if (cfg.live) {
+      const r = await realBuy(l);
+      if (!r.ok) continue;
+      state.walletUsd = await usdcBalance();
+    } else {
+      state.walletUsd -= l.priceUsd;
+    }
+    state.seenPaper.push(l.nft);
+    state.vault.push({
+      nft: l.nft, itemName: l.itemName, category: l.category, grade: l.grade,
+      gradingCompany: l.gradingCompany, image: l.image,
+      paidUsd: l.priceUsd, compUsd: l.priceUsd, compBasis: "junk filler — valued at cost",
+      boughtAt: Date.now(), status: "vault", role: "junk",
+    });
+    ids.add(idKey);
+    bought++;
+    ledger(cfg.live ? "live-buy-junk" : "paper-buy-junk", { nft: l.nft, item: l.itemName, price: l.priceUsd });
+    log.info("sniper", `${cfg.live ? "LIVE" : "PAPER"} JUNK ${l.itemName.slice(0, 50)} @ $${l.priceUsd} (capsule filler)`);
+  }
+  return bought;
 }

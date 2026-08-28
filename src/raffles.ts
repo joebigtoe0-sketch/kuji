@@ -55,7 +55,7 @@ export async function autoRaffle(): Promise<void> {
   const open = state.raffles.filter((r) => r.kind === "paid" && r.status === "open").length;
   if (open >= cfg.maxOpenRaffles) return;
   const pool = state.vault
-    .filter((v) => v.status === "vault" && !suspectComp(v))
+    .filter((v) => v.status === "vault" && v.role !== "junk" && !suspectComp(v))
     .sort((a, b) => a.boughtAt - b.boughtAt);
   // reserve the cheapest machine-eligible card for the capsule machine
   const machineWaiting = !state.machines.some((m) => m.status === "open");

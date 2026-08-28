@@ -26,7 +26,7 @@ const devnet = bool("DEVNET", false);
  * The live toggle lives here: flipping it switches the machine to real
  * mainnet operation from that moment, no restart needed.
  */
-interface Runtime { live?: boolean; tokenMint?: string; xUrl?: string }
+interface Runtime { live?: boolean; tokenMint?: string; xUrl?: string; bootstrap?: boolean }
 const RUNTIME_FILE = path.join(dataDir, "settings.json");
 const runtime: Runtime = (() => {
   try { return JSON.parse(fs.readFileSync(RUNTIME_FILE, "utf8")); } catch { return {}; }
@@ -65,6 +65,20 @@ export const cfg = {
 
   // live guardrails (on top of the paper-era sniper guardrails)
   liveMaxCardUsd: num("LIVE_MAX_CARD_USD", 50), // hard per-card cap for real buys
+
+  /**
+   * Bootstrap mode (admin-toggleable, ON by default): at launch, inventory
+   * beats edge. Cheap cards buy on a relaxed edge bar, and penny "junk"
+   * cards buy with NO edge requirement at all — they're capsule filler,
+   * valued at exactly what they cost (still zero-edge).
+   */
+  get bootstrap() { return runtime.bootstrap ?? bool("BOOTSTRAP", true); },
+  bootstrapMinEdge: num("BOOTSTRAP_MIN_EDGE", 0.05), // relaxed bar for cheap cards
+  bootstrapMaxCardUsd: num("BOOTSTRAP_MAX_CARD_USD", 40), // "cheap" = up to this
+  junkMaxUsd: num("JUNK_MAX_USD", 3), // junk tier: capsule-filler cards
+  junkTarget: num("JUNK_TARGET", 30), // keep this many junk cards on hand
+  junkBuysPerSweep: num("JUNK_BUYS_PER_SWEEP", 5),
+  junkPerMachine: num("JUNK_PER_MACHINE", 12), // junk cards stuffed into each machine
   payWatchEverySec: num("PAY_WATCH_EVERY_SEC", 20),
 
   // sniper
@@ -85,7 +99,12 @@ export const cfg = {
 
   // capsule machines
   capsuleUsd: num("CAPSULE_USD", 1),
-  machineCardShare: num("MACHINE_CARD_SHARE", 0.65), // card ≈ this share of machine value
+  /**
+   * No single card may exceed this share of a machine's pool. A pool one
+   * prize can dominate is the negative-EV trap: the jackpot always ships
+   * while only half the capsules sell. Keep it flat and it sells through.
+   */
+  maxCardShare: num("MAX_CARD_SHARE", 0.2),
   machineMaxCardUsd: num("MACHINE_MAX_CARD_USD", 150), // bigger cards go to raffles instead
 
   // raffles
