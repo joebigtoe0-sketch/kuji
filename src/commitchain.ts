@@ -28,15 +28,24 @@ export async function publishCommit(id: string, hash: string, resolveSlot: numbe
     ledger("commit-paper", { raffle: id, memo: text, note: "live mode would publish this memo on-chain" });
     return undefined;
   }
-  try {
-    const sig = await sendTx([memoIx(text)], `commit ${id}`);
-    ledger("commit-onchain", { raffle: id, sig, memo: text });
-    return sig;
-  } catch (e) {
-    // a raffle without an on-chain commit must not open in live mode
-    log.warn("commit", `publish failed for ${id}: ${String(e).slice(0, 120)}`);
-    throw e;
+  // Transient RPC failures ("Blockhash not found" mostly) must not block a
+  // raffle from opening — but a raffle with no on-chain commit must never
+  // open either, so retry hard and only then give up. Seen on devnet
+  // 2026-08-27: a single hiccup aborted raffle creation outright.
+  let last: unknown;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      const sig = await sendTx([memoIx(text)], `commit ${id}`);
+      ledger("commit-onchain", { raffle: id, sig, memo: text, attempt });
+      return sig;
+    } catch (e) {
+      last = e;
+      log.warn("commit", `publish attempt ${attempt}/4 failed for ${id}: ${String(e).slice(0, 100)}`);
+      if (attempt < 4) await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
   }
+  ledger("commit-FAILED", { raffle: id, memo: text, why: String(last).slice(0, 200) });
+  throw last;
 }
 
 export async function publishReveal(id: string, seed: string, blockhash: string, winnerIndex: number): Promise<string | undefined> {

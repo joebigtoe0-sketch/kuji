@@ -85,7 +85,8 @@ export function quote(m: Machine, n: number): { n: number; totalUsd: number; pri
   const left = remainingPrizes(m);
   const take = Math.min(n, left.length);
   // drawing k of the remaining uniformly has expected value k × mean, so
-  // charging the current mean per capsule is exactly fair for any batch
+  // one price for the whole batch is exactly fair — and it is the price
+  // openCapsules() will charge, so the quote is never short by a cent
   const price = capsulePrice(m);
   return { n: take, totalUsd: +(take * price).toFixed(2), priceUsd: price };
 }
@@ -229,13 +230,18 @@ export async function openCapsules(
   // paper mode manufactures a fake sig but uses a REAL chain blockhash
   const e = entropy ?? { txSig: "paper-" + crypto.randomBytes(24).toString("hex"), ...(await latestBlock()) };
   const won: Prize[] = [];
+  // ONE price for the whole batch, fixed before the first capsule opens.
+  // Drawing k capsules from the rack has expected value k × the rack mean,
+  // so charging the opening mean for every capsule in the batch is exactly
+  // fair — and it means "pay for 3, get 3". (Re-pricing per capsule inside
+  // a batch is also fair but drifts: on devnet a buyer paid for 3, the
+  // rack ticked up a cent mid-batch, and the third capsule was refused.)
+  const price = capsulePrice(m);
   let budget = budgetUsd ?? Infinity;
   let spent = 0;
   for (let k = 0; k < n; k++) {
     left = remainingIdx();
     if (!left.length) break;
-    // the price is whatever the rack is worth at THIS capsule
-    const price = capsulePrice(m);
     if (price > budget + 0.005) break; // paid amount exhausted
     budget -= price;
     spent += price;
