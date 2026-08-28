@@ -10,7 +10,31 @@ const num = (k: string, def: number) => {
   const v = Number(process.env[k]);
   return Number.isFinite(v) ? v : def;
 };
-const str = (k: string, def = "") => process.env[k] ?? def;
+/**
+ * An env var that exists but is EMPTY counts as unset.
+ *
+ * `??` only falls back on undefined, so a variable added in a dashboard and
+ * left blank used to pass "" straight through — which crashed the app on
+ * boot when it reached `new Connection("")`. Blank means "not configured".
+ */
+const str = (k: string, def = "") => {
+  const v = (process.env[k] ?? "").trim();
+  return v || def;
+};
+
+/** A URL-shaped setting: repair a missing scheme, reject anything unusable. */
+const url = (k: string, def: string) => {
+  const v = str(k);
+  if (!v) return def;
+  const withScheme = /^https?:\/\//i.test(v) ? v : `https://${v}`;
+  try {
+    new URL(withScheme);
+    return withScheme;
+  } catch {
+    console.warn(`[config] ${k}="${v}" is not a usable URL — falling back to ${def}`);
+    return def;
+  }
+};
 
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(root, "data");
 fs.mkdirSync(dataDir, { recursive: true });
@@ -49,7 +73,7 @@ export const cfg = {
   paperBudget: num("PAPER_BUDGET", 500),
 
   // chain
-  rpcUrl: str("RPC_URL", devnet ? "https://api.devnet.solana.com" : "https://api.mainnet-beta.solana.com"),
+  rpcUrl: url("RPC_URL", devnet ? "https://api.devnet.solana.com" : "https://api.mainnet-beta.solana.com"),
   usdcMint: str("USDC_MINT", devnet
     ? "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr" // USDC-Dev — what CC devnet actually trades in (mintable by anyone via the spl-token-faucet program)
     : "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
@@ -60,7 +84,7 @@ export const cfg = {
   ansemMinUsd: num("ANSEM_MIN", 10), // min ANSEM (ui amount) to qualify for the boost
   ansemPerUsd: num("ANSEM_PER_USD", 0), // ANSEM accepted for tickets at this rate (0 = USDC only)
   walletSecret: str("WALLET_SECRET"), // base58 or JSON byte array; empty → keypair generated to data/
-  dasUrl: str("DAS_URL"), // DAS-capable RPC (Helius) — required for compressed-NFT ownership/transfers; falls back to RPC_URL if that's Helius
+  dasUrl: url("DAS_URL", ""), // DAS-capable RPC (Helius) — required for compressed-NFT ownership/transfers; falls back to RPC_URL if that's Helius
   adminKey: str("ADMIN_KEY"), // guards /api/admin/* in live mode
 
   // live guardrails (on top of the paper-era sniper guardrails)
