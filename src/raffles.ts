@@ -142,6 +142,11 @@ export function buyTickets(raffleId: string, buyer: string, n: number): { ok: bo
 
 /** Fill-or-refund + resolution — run on a timer. */
 export async function tickRaffles(): Promise<void> {
+  // The kill switch has to stop DRAWS too, not just money. A raffle whose
+  // entry list turns out to be wrong (a bonding curve counted as a holder,
+  // say) must be stoppable before it resolves — halting only the payout
+  // leaves a published winner that should never have been drawn.
+  if (halted()) return;
   for (const r of state.raffles.filter((x) => x.status === "open")) {
     const soldN = r.sold.reduce((s, t) => s + t.n, 0);
     const card = state.vault.find((v) => v.nft === r.nft);

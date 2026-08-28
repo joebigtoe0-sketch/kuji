@@ -13,7 +13,7 @@ import { simTick, seededHolders } from "./sim.js";
 import { buildPayTx, buildCapsulePayTx, buildMarketPayTx, watchPayments } from "./payments.js";
 import { autoMachine, openCapsules, verifyMachine, capsulePrice, quote } from "./capsules.js";
 import { listTickets, cancelListing, fillListing, marketFor, tickMarket } from "./market.js";
-import { tickPayouts, pendingPayouts, stuckPayouts } from "./payouts.js";
+import { tickPayouts, pendingPayouts, stuckPayouts, queuePayout } from "./payouts.js";
 import { snapshotHolders, holderReport } from "./holders.js";
 import { halted, setHalt } from "./halt.js";
 import { walletPk, solBalance, usdcBalance, walletSource } from "./wallet.js";
@@ -227,6 +227,32 @@ app.get("/api/admin/holders", async (req, res) => {
     top: rep.holders.sort((a, b) => b.balance - a.balance).slice(0, 5)
       .map((h) => ({ wallet: h.wallet, balance: h.balance })),
   });
+});
+
+/**
+ * Void an unresolved raffle and put the card back in the vault.
+ * For when the entry list itself is wrong — e.g. a bonding curve got
+ * counted as a holder — and the honest fix is to cancel and re-run with a
+ * corrected snapshot rather than let a bad draw stand.
+ */
+app.post("/api/admin/void-raffle", (req, res) => {
+  if (!admin(req)) return res.status(403).json({ ok: false });
+  const r = state.raffles.find((x) => x.id === String(req.body?.id ?? ""));
+  if (!r) return res.json({ ok: false, why: "no such raffle" });
+  if (r.status === "resolved") return res.json({ ok: false, why: "already resolved — the draw is public; run a fresh raffle instead of rewriting this one" });
+  const why = String(req.body?.why ?? "voided by operator");
+  r.status = "refunded";
+  const card = state.vault.find((v) => v.nft === r.nft);
+  if (card) { card.status = "vault"; card.raffleId = undefined; }
+  // paid raffles: give everyone their money back
+  const owed = new Map<string, number>();
+  for (const t of r.sold) if (t.paidUsd > 0) owed.set(t.buyer, (owed.get(t.buyer) ?? 0) + t.paidUsd);
+  for (const [buyer, usd] of owed)
+    queuePayout({ kind: "usdc", to: buyer, amountUsd: +usd.toFixed(2), raffleId: r.id, reason: `raffle voided: ${why}` });
+  save();
+  ledger("raffle-voided", { raffle: r.id, kind: r.kind, why, refunds: owed.size });
+  log.warn("raffle", `VOIDED ${r.id}: ${why}${owed.size ? ` — ${owed.size} refund(s) queued` : ""}`);
+  res.json({ ok: true, refunds: owed.size, cardReturned: !!card });
 });
 
 // clear paper-mode leftovers by hand (also runs automatically on go-live)
