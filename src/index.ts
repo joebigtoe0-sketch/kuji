@@ -14,7 +14,7 @@ import { buildPayTx, buildCapsulePayTx, buildMarketPayTx, watchPayments } from "
 import { autoMachine, openCapsules, verifyMachine, capsulePrice, quote } from "./capsules.js";
 import { listTickets, cancelListing, fillListing, marketFor, tickMarket } from "./market.js";
 import { tickPayouts, pendingPayouts, stuckPayouts } from "./payouts.js";
-import { snapshotHolders } from "./holders.js";
+import { snapshotHolders, holderReport } from "./holders.js";
 import { halted, setHalt } from "./halt.js";
 import { walletPk, solBalance, usdcBalance, walletSource } from "./wallet.js";
 import { hasDas, ownsAsset, assetInfo } from "./assets.js";
@@ -216,6 +216,18 @@ app.post("/api/admin/settings", async (req, res) => {
   }
   res.json({ ok: true, settings: now, live: cfg.live });
 });
+/** Why is the holder list empty? Answers without creating anything. */
+app.get("/api/admin/holders", async (req, res) => {
+  if (!admin(req)) return res.status(403).json({ ok: false });
+  const rep = await holderReport();
+  res.json({
+    ok: true, tokenMint: cfg.tokenMint || null, live: cfg.live,
+    holders: rep.holders.length, rawAccounts: rep.raw ?? 0, why: rep.why ?? null,
+    top: rep.holders.sort((a, b) => b.balance - a.balance).slice(0, 5)
+      .map((h) => ({ wallet: h.wallet, balance: h.balance })),
+  });
+});
+
 // clear paper-mode leftovers by hand (also runs automatically on go-live)
 app.post("/api/admin/purge-demo", async (req, res) => {
   if (!admin(req)) return res.status(403).json({ ok: false });
@@ -275,8 +287,9 @@ app.post("/api/admin/holder-raffle", async (req, res) => {
   if (!card) return res.json({ ok: false, why: "no such card sitting in the vault" });
   if (!cfg.live) return res.json({ ok: false, why: "paper mode — go live first" });
   if (!cfg.tokenMint) return res.json({ ok: false, why: "no token mint set, so there are no holders to raffle to. Set the token CA above first." });
-  const holders = await snapshotHolders();
-  if (!holders.length) return res.json({ ok: false, why: "the token has no holders yet (or the RPC could not read them) — a raffle with no entrants cannot resolve" });
+  const rep = await holderReport();
+  if (!rep.holders.length) return res.json({ ok: false, why: rep.why ?? "no holders found" });
+  const holders = rep.holders;
   try {
     const r = await createHolderRaffle(card, holders, { fromPool: false });
     res.json({ ok: true, id: r.id, entrants: holders.length, entries: r.tickets });

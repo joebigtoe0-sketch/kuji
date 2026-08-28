@@ -801,6 +801,7 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
       <p style="font-size:13px;margin-bottom:10px">Give a vault card away to token holders, weighted by
       balance. Costs the profit pool nothing — use this for cards you supplied yourself.</p>
       <div id="vaultlist"></div>
+      <button class="cta" id="chkholders" style="margin-top:12px;padding:8px 16px;background:var(--acid);box-shadow:0 5px 0 #2b7f74"><b>CHECK HOLDERS</b></button>
       <p id="hmsg" class="dim" style="margin-top:10px;font-size:13px"></p>
     </div>
 
@@ -874,6 +875,13 @@ $('livebtn').onclick=async()=>{
   if(goingLive&&!confirm('GO LIVE?\\n\\nThe machine starts spending REAL USDC from wallet\\n'+st.wallet+'\\nfrom this moment. Sure?'))return;
   await fetch('/api/admin/settings',{method:'POST',headers:hdr(),body:JSON.stringify({live:goingLive})});
   $('lmsg').textContent=goingLive?'MACHINE IS LIVE':'back to paper';refresh();
+};
+$('chkholders').onclick=async()=>{
+  $('hmsg').textContent='reading the chain…';
+  const j=await (await fetch('/api/admin/holders',{headers:hdr()})).json();
+  $('hmsg').textContent = j.holders
+    ? (j.holders+' holders eligible (from '+j.rawAccounts+' token accounts). Top: '+j.top.map(t=>t.wallet.slice(0,6)+'… '+Math.round(t.balance)).join(', '))
+    : ('0 holders — '+(j.why||'unknown')+(j.tokenMint?' [CA '+j.tokenMint.slice(0,8)+'…]':' [no CA set]'));
 };
 $('purgebtn').onclick=async()=>{
   if(!confirm('Clear all paper-mode raffles, machines and listings?'))return;
