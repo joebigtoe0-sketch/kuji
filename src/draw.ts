@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
-import { Connection } from "@solana/web3.js";
+import { connection as conn } from "./wallet.js";
 
 /**
- * The fair-dice machinery — the same doctrine as RIKU's trade commitments.
+ * The fair-dice machinery.
  *
  * COMMIT (before any ticket sells):
  *   commitHash = sha256(manifestJson | secretSeed | resolveSlot)
@@ -18,8 +18,11 @@ import { Connection } from "@solana/web3.js";
  * grade even while the money is fake.
  */
 
-const RPC = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
-const conn = new Connection(RPC, "confirmed");
+// NOTE: this module used to build its own Connection from process.env.RPC_URL
+// directly, bypassing config entirely — so every repair config makes (empty
+// value, missing scheme, a bare Helius key) was undone here and the app still
+// crashed on boot. Config is the ONLY place that reads chain env vars now;
+// everything shares the one connection from wallet.ts.
 
 export function makeSeed(): string {
   return crypto.randomBytes(16).toString("hex");
