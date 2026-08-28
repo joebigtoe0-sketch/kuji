@@ -193,6 +193,24 @@ export async function tickHolderRaffles(holders: { wallet: string; balance: numb
     .filter((v) => v.status === "vault" && v.compUsd <= state.holderPoolUsd && !suspectComp(v))
     .sort((a, b) => b.compUsd - a.compUsd)[0];
   if (!candidate || !holders.length) return;
+  await createHolderRaffle(candidate, holders, { fromPool: true });
+}
+
+/**
+ * Build a free, balance-weighted holder raffle for one card.
+ *
+ * `fromPool` is what separates the two ways a card gets given away:
+ * the automatic drops are BOUGHT out of the holder pool (half of realized
+ * profit), so the pool is debited. A card the operator supplies is a
+ * donation, so nothing is debited — otherwise the pool would go negative
+ * and the next automatic drop would be silently blocked.
+ */
+export async function createHolderRaffle(
+  candidate: VaultCard,
+  holders: { wallet: string; balance: number }[],
+  opts: { fromPool: boolean },
+): Promise<Raffle> {
+  if (!holders.length) throw new Error("no holders to raffle to");
   const slotNow = await currentSlot();
   const resolveSlot = slotNow + Math.round(0.5 * SLOTS_PER_HOUR); // ~30 min
   const id = crypto.randomBytes(6).toString("hex");
@@ -210,11 +228,12 @@ export async function tickHolderRaffles(holders: { wallet: string; balance: numb
   };
   saveSeed(id, seed);
   r.commitSig = await publishCommit(id, r.commitHash, resolveSlot);
-  state.holderPoolUsd = +(state.holderPoolUsd - candidate.compUsd).toFixed(2);
+  if (opts.fromPool) state.holderPoolUsd = +(state.holderPoolUsd - candidate.compUsd).toFixed(2);
   candidate.raffleId = id;
   candidate.status = "raffled";
   state.raffles.push(r);
   save();
-  ledger("holder-raffle-open", { id, nft: candidate.nft, item: candidate.itemName, entrants: entries.length, entries: total, poolSpent: candidate.compUsd, commit: r.commitHash, resolveSlot });
-  log.info("raffle", `HOLDER DROP ${id}: ${candidate.itemName.slice(0, 50)} to ${entries.length} holders`);
+  ledger("holder-raffle-open", { id, nft: candidate.nft, item: candidate.itemName, entrants: entries.length, entries: total, poolSpent: opts.fromPool ? candidate.compUsd : 0, donated: !opts.fromPool, commit: r.commitHash, resolveSlot });
+  log.info("raffle", `HOLDER DROP ${id}: ${candidate.itemName.slice(0, 50)} to ${entries.length} holders${opts.fromPool ? "" : " (operator-supplied)"}`);
+  return r;
 }

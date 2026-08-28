@@ -768,6 +768,36 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
       <input id="xu" placeholder="@kuji  or  https://x.com/kuji" style="width:100%;padding:10px 12px;border-radius:10px;border:2px solid var(--edge);background:#0d1016;color:var(--cream);font:700 13px var(--mono)">
       <button class="cta" id="saveset" style="margin-top:14px;padding:10px 20px"><b>SAVE SETTINGS</b></button>
     </div>
+    <div class="receipts" id="demobox" style="display:none;border-color:var(--red)">
+      <h3 style="color:var(--red)">PAPER-MODE LEFTOVERS</h3>
+      <p style="font-size:13px;margin-bottom:12px">Raffles, machines and ticket listings created by the
+      simulator are still on the public site. They reference cards the machine never actually bought, so
+      they must not take real money. Payments to them are refused and refunded automatically, but clear
+      them so nobody sees a fake sold-out raffle.</p>
+      <button class="cta" id="purgebtn" style="padding:10px 20px;background:var(--red);box-shadow:0 6px 0 #8f2222"><b>CLEAR DEMO DATA</b></button>
+    </div>
+
+    <div class="receipts">
+      <h3>IMPORT A CARD YOU BOUGHT</h3>
+      <p style="font-size:13px;margin-bottom:10px">Send the card to the machine wallet first, then paste its
+      mint here. Ownership is checked on-chain before it enters the vault.</p>
+      <input id="inft" placeholder="card mint address" style="width:100%;padding:10px 12px;border-radius:10px;border:2px solid var(--edge);background:#0d1016;color:var(--cream);font:700 13px var(--mono)">
+      <div style="display:flex;gap:10px;margin-top:10px">
+        <input id="ipaid" placeholder="what you paid (USD)" style="flex:1;padding:10px 12px;border-radius:10px;border:2px solid var(--edge);background:#0d1016;color:var(--cream);font:700 13px var(--mono)">
+        <input id="icomp" placeholder="what it's worth (USD)" style="flex:1;padding:10px 12px;border-radius:10px;border:2px solid var(--edge);background:#0d1016;color:var(--cream);font:700 13px var(--mono)">
+      </div>
+      <button class="cta" id="importbtn" style="margin-top:12px;padding:10px 20px"><b>IMPORT TO VAULT</b></button>
+      <p id="imsg" class="dim" style="margin-top:10px;font-size:13px"></p>
+    </div>
+
+    <div class="receipts">
+      <h3>FREE HOLDER RAFFLE</h3>
+      <p style="font-size:13px;margin-bottom:10px">Give a vault card away to token holders, weighted by
+      balance. Costs the profit pool nothing — use this for cards you supplied yourself.</p>
+      <div id="vaultlist"></div>
+      <p id="hmsg" class="dim" style="margin-top:10px;font-size:13px"></p>
+    </div>
+
     <div class="receipts">
       <h3>THE SWITCH</h3>
       <p style="font-size:13px;margin-bottom:12px">Live mode = the sniper spends <b>real USDC</b> on mainnet, commitments go
@@ -810,6 +840,20 @@ async function refresh(){
     ['X', st.xUrl||'— not set'],
   ].map(r=>'<tr><td>'+r[0]+'</td><td>'+r[1]+'</td></tr>').join('');
   $('ca').value=st.tokenMint||'';$('xu').value=st.xUrl||'';
+  $('demobox').style.display=st.demoLeftovers?'block':'none';
+  $('vaultlist').innerHTML=(st.vaultCards||[]).length
+    ? '<table style="width:100%;border-collapse:collapse;font-size:13px">'+st.vaultCards.map(c=>
+        '<tr><td style="padding:6px 4px">'+c.item.slice(0,46)+'</td>'+
+        '<td style="padding:6px 4px;opacity:.6">$'+c.paid+' → $'+c.comp+'</td>'+
+        '<td style="padding:6px 4px;text-align:right"><button class="hr" data-nft="'+c.nft+'" style="cursor:pointer;background:var(--signal);color:#04101f;border:0;border-radius:999px;padding:6px 12px;font:900 10px var(--lab);letter-spacing:.1em">RAFFLE FREE</button></td></tr>').join('')+'</table>'
+    : '<p class="dim" style="font-size:13px">vault is empty</p>';
+  document.querySelectorAll('.hr').forEach(b=>{b.onclick=async()=>{
+    if(!confirm('Give this card away free to token holders?'))return;
+    b.textContent='…';
+    const j=await (await fetch('/api/admin/holder-raffle',{method:'POST',headers:hdr(),body:JSON.stringify({nft:b.dataset.nft})})).json();
+    $('hmsg').textContent=j.ok?('holder raffle open — '+j.entrants+' holders, '+j.entries+' entries'):j.why;
+    refresh();
+  };});
   $('livebtn').querySelector('b').textContent=st.live?'SWITCH TO PAPER':'GO LIVE (MAINNET)';
   $('haltbtn').querySelector('b').textContent=st.halted?'RESUME MACHINE':'EMERGENCY HALT';
   $('bootbtn').querySelector('b').textContent=st.bootstrap?'BOOTSTRAP: ON':'BOOTSTRAP: OFF';
@@ -824,6 +868,20 @@ $('livebtn').onclick=async()=>{
   if(goingLive&&!confirm('GO LIVE?\\n\\nThe machine starts spending REAL USDC from wallet\\n'+st.wallet+'\\nfrom this moment. Sure?'))return;
   await fetch('/api/admin/settings',{method:'POST',headers:hdr(),body:JSON.stringify({live:goingLive})});
   $('lmsg').textContent=goingLive?'MACHINE IS LIVE':'back to paper';refresh();
+};
+$('purgebtn').onclick=async()=>{
+  if(!confirm('Clear all paper-mode raffles, machines and listings?'))return;
+  const j=await (await fetch('/api/admin/purge-demo',{method:'POST',headers:hdr()})).json();
+  $('lmsg').textContent='cleared: '+JSON.stringify(j.purged);
+  refresh();
+};
+$('importbtn').onclick=async()=>{
+  $('imsg').textContent='checking ownership on-chain…';
+  const j=await (await fetch('/api/admin/import-card',{method:'POST',headers:hdr(),body:JSON.stringify({
+    nft:$('inft').value.trim(), paidUsd:Number($('ipaid').value)||0, compUsd:Number($('icomp').value)||0})})).json();
+  $('imsg').textContent=j.ok?('imported: '+j.card.item):j.why;
+  if(j.ok){$('inft').value='';$('ipaid').value='';$('icomp').value='';}
+  refresh();
 };
 $('bootbtn').onclick=async()=>{
   await fetch('/api/admin/settings',{method:'POST',headers:hdr(),body:JSON.stringify({bootstrap:!st.bootstrap})});

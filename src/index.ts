@@ -17,7 +17,9 @@ import { tickPayouts, pendingPayouts, stuckPayouts } from "./payouts.js";
 import { snapshotHolders } from "./holders.js";
 import { halted, setHalt } from "./halt.js";
 import { walletPk, solBalance, usdcBalance, walletSource } from "./wallet.js";
-import { hasDas } from "./assets.js";
+import { hasDas, ownsAsset, assetInfo } from "./assets.js";
+import { purgeDemo } from "./purge.js";
+import { createHolderRaffle } from "./raffles.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -163,6 +165,10 @@ app.get("/api/admin/status", async (req, res) => {
     sol: await solBalance().catch(() => -1),
     usdc: await usdcBalance().catch(() => -1),
     payouts: { pending: pendingPayouts().length, stuck: stuckPayouts() },
+    vaultCards: state.vault.filter((v) => v.status === "vault")
+      .map((v) => ({ nft: v.nft, item: v.itemName, paid: v.paidUsd, comp: v.compUsd })),
+    demoLeftovers: state.raffles.filter((r) => r.status === "open" && !r.commitSig).length
+      + state.machines.filter((m) => m.status === "open" && !m.commitSig).length,
     suspectCards: state.vault.filter((v) => v.status === "vault" && (v.compUsd - v.paidUsd) / v.compUsd > cfg.maxEdge)
       .map((v) => ({ nft: v.nft, item: v.itemName, paid: v.paidUsd, comp: v.compUsd })),
   });
@@ -180,7 +186,7 @@ function normalizeX(input: string): string {
 
 // runtime settings: token CA, X link, and THE LIVE TOGGLE — flipping live
 // starts real mainnet operation (sniper buys with real USDC) immediately
-app.post("/api/admin/settings", (req, res) => {
+app.post("/api/admin/settings", async (req, res) => {
   if (!admin(req)) return res.status(403).json({ ok: false });
   const wasLive = cfg.live;
   const patch: Record<string, unknown> = {};
@@ -198,7 +204,11 @@ app.post("/api/admin/settings", (req, res) => {
   }
   const now = setRuntime(patch);
   if (!wasLive && cfg.live) {
-    ledger("admin-LIVE", { at: Date.now(), wallet: walletPk.toBase58() });
+    // paper-mode raffles/machines/listings must never accept real money —
+    // they reference cards the machine only pretended to buy
+    const purged = await purgeDemo().catch((e) => { log.warn("purge", String(e).slice(0, 120)); return null; });
+    if (purged) log.info("admin", `demo data cleared on go-live: ${JSON.stringify(purged)}`);
+    ledger("admin-LIVE", { at: Date.now(), wallet: walletPk.toBase58(), purged });
     log.info("admin", `🔴 MACHINE IS LIVE — real ${cfg.devnet ? "devnet" : "MAINNET"} operation from now on (wallet ${walletPk.toBase58()})`);
   } else if (wasLive && cfg.live === false) {
     ledger("admin-paper", { at: Date.now() });
@@ -206,6 +216,75 @@ app.post("/api/admin/settings", (req, res) => {
   }
   res.json({ ok: true, settings: now, live: cfg.live });
 });
+// clear paper-mode leftovers by hand (also runs automatically on go-live)
+app.post("/api/admin/purge-demo", async (req, res) => {
+  if (!admin(req)) return res.status(403).json({ ok: false });
+  res.json({ ok: true, purged: await purgeDemo() });
+});
+
+/**
+ * Import a card the OPERATOR bought by hand into the vault.
+ * Ownership is verified on-chain first: without that check the machine
+ * could advertise, and then owe, a card it does not hold.
+ */
+app.post("/api/admin/import-card", async (req, res) => {
+  if (!admin(req)) return res.status(403).json({ ok: false });
+  const nft = String(req.body?.nft ?? "").trim();
+  if (!nft) return res.json({ ok: false, why: "need an nft mint address" });
+  if (state.vault.some((v) => v.nft === nft)) return res.json({ ok: false, why: "already in the vault" });
+  let owned = false;
+  try { owned = await ownsAsset(nft); } catch (e) { return res.json({ ok: false, why: `could not check ownership: ${String(e).slice(0, 90)}` }); }
+  if (!owned) return res.json({ ok: false, why: "the machine wallet does not hold that card — send it to the machine wallet first" });
+
+  const paidUsd = Number(req.body?.paidUsd) || 0;
+  const compUsd = Number(req.body?.compUsd) || paidUsd;
+  if (compUsd <= 0) return res.json({ ok: false, why: "need compUsd (what it is worth) — that is what tickets get priced from" });
+
+  let itemName = String(req.body?.itemName ?? "").trim();
+  let image: string | undefined;
+  let kind = "";
+  try {
+    const info = await assetInfo(nft);
+    kind = info.kind;
+    const das = await fetch(cfg.dasUrl || cfg.rpcUrl, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: nft } }),
+    }).then((r) => r.json()).catch(() => null) as any;
+    itemName = itemName || String(das?.result?.content?.metadata?.name ?? "").trim();
+    image = das?.result?.content?.links?.image ?? das?.result?.content?.files?.[0]?.uri;
+  } catch { /* metadata is a nicety; ownership is the thing that matters */ }
+
+  const card = {
+    nft, itemName: itemName || `Card ${nft.slice(0, 6)}`, category: String(req.body?.category ?? "Pokemon"),
+    grade: String(req.body?.grade ?? ""), gradingCompany: String(req.body?.gradingCompany ?? ""),
+    image, paidUsd, compUsd, compBasis: "operator-supplied card (imported by hand)",
+    boughtAt: Date.now(), status: "vault" as const,
+  };
+  state.vault.push(card);
+  save();
+  ledger("card-imported", { nft, item: card.itemName, paidUsd, compUsd, standard: kind });
+  log.info("admin", `imported ${card.itemName.slice(0, 44)} (${kind}) — comp $${compUsd}`);
+  res.json({ ok: true, card });
+});
+
+/** Run a FREE holder raffle on a specific vault card, funded by nobody. */
+app.post("/api/admin/holder-raffle", async (req, res) => {
+  if (!admin(req)) return res.status(403).json({ ok: false });
+  const nft = String(req.body?.nft ?? "").trim();
+  const card = state.vault.find((v) => v.nft === nft && v.status === "vault");
+  if (!card) return res.json({ ok: false, why: "no such card sitting in the vault" });
+  if (!cfg.live) return res.json({ ok: false, why: "paper mode — go live first" });
+  if (!cfg.tokenMint) return res.json({ ok: false, why: "no token mint set, so there are no holders to raffle to. Set the token CA above first." });
+  const holders = await snapshotHolders();
+  if (!holders.length) return res.json({ ok: false, why: "the token has no holders yet (or the RPC could not read them) — a raffle with no entrants cannot resolve" });
+  try {
+    const r = await createHolderRaffle(card, holders, { fromPool: false });
+    res.json({ ok: true, id: r.id, entrants: holders.length, entries: r.tickets });
+  } catch (e) {
+    res.json({ ok: false, why: String(e).slice(0, 160) });
+  }
+});
+
 // re-price a suspect card after human review (unblocks it for raffling)
 app.post("/api/admin/reprice", (req, res) => {
   if (!admin(req)) return res.status(403).json({ ok: false });

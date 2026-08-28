@@ -13,6 +13,7 @@ import { queuePayout } from "./payouts.js";
 import { openCapsules, quote } from "./capsules.js";
 import { fillListing } from "./market.js";
 import { blockhashOfSlot } from "./draw.js";
+import { isReal } from "./purge.js";
 import { log } from "./log.js";
 
 /**
@@ -65,6 +66,7 @@ async function buildTransfer(payer: string, usd: number, memo: string, currency:
 export async function buildPayTx(raffleId: string, n: number, payer: string, currency: "usdc" | "ansem" = "usdc"): Promise<{ ok: boolean; tx?: string; why?: string }> {
   const r = state.raffles.find((x) => x.id === raffleId);
   if (!r || r.status !== "open" || r.kind !== "paid") return { ok: false, why: "no open paid raffle" };
+  if (!isReal(r)) return { ok: false, why: "this is a paper-mode demo raffle and cannot be bought" };
   const left = r.tickets - r.sold.reduce((s, t) => s + t.n, 0);
   if (n < 1 || n > left) return { ok: false, why: `only ${left} tickets left` };
   const usd = +(n * r.ticketUsd).toFixed(2);
@@ -77,6 +79,7 @@ export async function buildPayTx(raffleId: string, n: number, payer: string, cur
 export async function buildCapsulePayTx(machineId: string, n: number, payer: string, currency: "usdc" | "ansem" = "usdc"): Promise<{ ok: boolean; tx?: string; why?: string }> {
   const m = state.machines.find((x) => x.id === machineId);
   if (!m || m.status !== "open") return { ok: false, why: "no open machine" };
+  if (!isReal(m)) return { ok: false, why: "this is a paper-mode demo machine and cannot be bought" };
   const left = m.prizes.filter((p) => !p.claimedBy).length;
   if (n < 1 || n > Math.min(left, 25)) return { ok: false, why: `1-${Math.min(left, 25)} capsules per tx` };
   const q = quote(m, n);
@@ -146,6 +149,12 @@ export async function watchPayments(): Promise<void> {
           refund(usdReceived, raffleId, "raffle not open — full refund");
           continue;
         }
+        // a paper-era raffle has no on-chain commit and no card behind it
+        if (!isReal(r)) {
+          refund(usdReceived, raffleId, "demo raffle — refunded, never chargeable");
+          log.warn("pay", `payment hit a paper-mode raffle ${r.id} — refunded`);
+          continue;
+        }
         // credit from money received, never from the memo's claim
         const left = r.tickets - r.sold.reduce((x, t) => x + t.n, 0);
         const n = Math.min(left, Math.floor(usdReceived / r.ticketUsd + 0.001));
@@ -160,6 +169,11 @@ export async function watchPayments(): Promise<void> {
         const m = state.machines.find((x) => x.id === machineId);
         if (!m || m.status !== "open") {
           refund(usdReceived, machineId, "machine closed — full refund");
+          continue;
+        }
+        if (!isReal(m)) {
+          refund(usdReceived, machineId, "demo machine — refunded, never chargeable");
+          log.warn("pay", `payment hit a paper-mode machine ${m.id} — refunded`);
           continue;
         }
         // the price floats, so the payment itself is the budget: open as
