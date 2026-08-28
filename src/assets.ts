@@ -30,9 +30,17 @@ export interface AssetInfo { kind: AssetKind; owner: string }
 
 function dasUrl(): string {
   if (cfg.dasUrl) return cfg.dasUrl;
+  // Helius serves DAS and normal RPC on the SAME endpoint, so pointing
+  // RPC_URL at Helius is all most setups need — DAS_URL is only for
+  // splitting them across two providers.
   if (cfg.rpcUrl.includes("helius")) return cfg.rpcUrl;
   return "";
 }
+
+/** Can we read compressed NFTs at all? Without this, a compressed card
+ *  cannot be ownership-checked after a buy, and cannot be shipped as a
+ *  prize — the money moves and the card cannot follow. */
+export const hasDas = (): boolean => !!dasUrl();
 
 async function das(method: string, params: unknown): Promise<any> {
   const url = dasUrl();

@@ -796,6 +796,8 @@ async function refresh(){
   $('stat').innerHTML=[
     ['mode', st.live?(st.devnet?'LIVE — devnet':'🔴 LIVE — MAINNET'):'paper'],
     ['halted', st.halted?'YES — nothing buys or pays':'no'],
+    ['RPC', st.rpcHost],
+    ['DAS (compressed cards)', st.das?'available — prizes can ship':'⚠ NOT configured — cannot go live'],
     ['wallet', st.wallet],
     ['key source', st.walletSource==='env'?'WALLET_SECRET — you hold a backup'
       :st.walletSource==='disk'?'⚠ volume only — no backup outside this disk'

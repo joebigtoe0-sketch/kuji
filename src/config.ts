@@ -6,6 +6,12 @@ import dotenv from "dotenv";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 dotenv.config({ path: path.join(root, ".env") });
 
+const bool = (k: string, def: boolean) =>
+  (process.env[k] ?? String(def)).toLowerCase() === "true";
+
+const envLive = bool("LIVE_MODE", false);
+const devnet = bool("DEVNET", false);
+
 const num = (k: string, def: number) => {
   const v = Number(process.env[k]);
   return Number.isFinite(v) ? v : def;
@@ -26,6 +32,14 @@ const str = (k: string, def = "") => {
 const url = (k: string, def: string) => {
   const v = str(k);
   if (!v) return def;
+  // A bare Helius API key is an easy thing to paste here. On its own it would
+  // pass URL validation as the hostname "https://<uuid>" and then fail every
+  // request with DNS errors, so expand it into the real endpoint instead.
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) {
+    const host = devnet ? "devnet.helius-rpc.com" : "mainnet.helius-rpc.com";
+    console.warn(`[config] ${k} looked like a bare Helius key — using https://${host}/?api-key=…`);
+    return `https://${host}/?api-key=${v}`;
+  }
   const withScheme = /^https?:\/\//i.test(v) ? v : `https://${v}`;
   try {
     new URL(withScheme);
@@ -38,12 +52,6 @@ const url = (k: string, def: string) => {
 
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(root, "data");
 fs.mkdirSync(dataDir, { recursive: true });
-
-const bool = (k: string, def: boolean) =>
-  (process.env[k] ?? String(def)).toLowerCase() === "true";
-
-const envLive = bool("LIVE_MODE", false);
-const devnet = bool("DEVNET", false);
 
 /**
  * Runtime settings (admin panel) — override env, survive restarts.

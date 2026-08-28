@@ -17,6 +17,7 @@ import { tickPayouts, pendingPayouts, stuckPayouts } from "./payouts.js";
 import { snapshotHolders } from "./holders.js";
 import { halted, setHalt } from "./halt.js";
 import { walletPk, solBalance, usdcBalance, walletSource } from "./wallet.js";
+import { hasDas } from "./assets.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -152,6 +153,7 @@ app.get("/api/admin/status", async (req, res) => {
   if (!admin(req)) return res.status(403).json({ ok: false });
   res.json({
     live: cfg.live, devnet: cfg.devnet, halted: halted(), bootstrap: cfg.bootstrap,
+    das: hasDas(), rpcHost: (() => { try { return new URL(cfg.rpcUrl).host; } catch { return cfg.rpcUrl; } })(),
     tokenMint: cfg.tokenMint, xUrl: cfg.xUrl,
     vault: state.vault.filter((v) => v.status === "vault").length,
     openRaffles: state.raffles.filter((r) => r.status === "open").length,
@@ -186,6 +188,14 @@ app.post("/api/admin/settings", (req, res) => {
   if (typeof req.body?.xUrl === "string") patch.xUrl = normalizeX(req.body.xUrl);
   if (typeof req.body?.live === "boolean") patch.live = req.body.live;
   if (typeof req.body?.bootstrap === "boolean") patch.bootstrap = req.body.bootstrap;
+  // Going live without DAS means compressed cards can be BOUGHT but never
+  // verified or shipped — refuse rather than discover it on the first prize.
+  if (patch.live === true && !hasDas()) {
+    return res.json({
+      ok: false,
+      why: "no DAS RPC configured. Set RPC_URL to your Helius endpoint (it serves DAS too), or set DAS_URL. Without it, compressed cards can be bought but not delivered.",
+    });
+  }
   const now = setRuntime(patch);
   if (!wasLive && cfg.live) {
     ledger("admin-LIVE", { at: Date.now(), wallet: walletPk.toBase58() });

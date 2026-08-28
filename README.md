@@ -72,8 +72,8 @@ npm run typecheck    # before committing
    | variable | why |
    |---|---|
    | `ADMIN_KEY` | guards `/admin`. Live mode **refuses to start** without it — no key, no kill switch. |
-   | `RPC_URL` | a real RPC. Public endpoints rate-limit `getBlock` (every capsule open needs one) and refuse `getProgramAccounts` (holder snapshots). |
-   | `DAS_URL` | DAS-capable RPC (Helius). Required in live mode: some cards are compressed NFTs, which have no on-chain account to read. |
+   | `RPC_URL` | a real RPC — with Helius this one variable is enough. Public endpoints rate-limit `getBlock` (every capsule open needs one) and refuse `getProgramAccounts` (holder snapshots). |
+   | `DAS_URL` | only if your RPC is **not** Helius. "DAS" is the index that can read *compressed* NFTs, which have no on-chain account (they are leaves in a merkle tree). Helius serves it on the same endpoint as RPC, so setting `RPC_URL` covers both. Without DAS, a compressed card can be bought but never verified or shipped — so live mode refuses to switch on until it is reachable. |
    | `LIVE_MODE` | leave unset. Flip live from `/admin` once the wallet is funded — it applies immediately, no redeploy. |
 
 4. **Make the wallet up front**, so the key exists somewhere you control rather than only on a
