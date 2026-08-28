@@ -43,6 +43,18 @@ text-shadow:0 3px 0 #000306}
 .hd nav a{padding:6px 2px;border-bottom:3px solid transparent}
 .hd nav a:hover{color:var(--signal);border-bottom-color:var(--signal)}
 .papertag{border:2px solid var(--red);color:#ffb0b0;padding:6px 14px;border-radius:999px;font:800 10.5px var(--lab);letter-spacing:.18em}
+.livetag{border:2px solid var(--green);color:var(--green);padding:6px 14px;border-radius:999px;font:800 10.5px var(--lab);letter-spacing:.18em}
+.xlink{font-size:1.25rem;font-weight:900;width:40px;height:40px;display:grid;place-items:center;border:2px solid var(--edge);border-radius:12px}
+.xlink:hover{border-color:var(--signal);color:var(--signal)}
+.capill{display:inline-flex;align-items:center;gap:10px;margin-top:22px;padding:10px 16px;border-radius:999px;cursor:pointer;
+background:var(--ink2);border:2px solid var(--edge);color:var(--cream);transition:all .15s}
+.capill:hover{border-color:var(--signal)}
+.capill small{font:900 10px var(--lab);letter-spacing:.2em;color:var(--acid)}
+.capill code{font:700 13px var(--mono)}
+.capill .cpy{font:900 9.5px var(--lab);letter-spacing:.12em;text-transform:uppercase;color:var(--signal)}
+.capill.soon{cursor:default;opacity:.55}
+.xfoot{display:inline-block;margin-top:18px;font:900 13px var(--lab);letter-spacing:.12em;border:3px solid #06251f;border-radius:999px;padding:8px 18px}
+.xfoot:hover{background:#06251f;color:var(--signal)}
 @media(max-width:760px){.hd nav{display:none}}
 
 /* ticker */
@@ -239,7 +251,10 @@ function shell(title: string, body: string, ticker?: string): string {
 <header class="hd">
   <a class="wordmark" href="/">NERD<b>NAME</b><span style="font:10px var(--lab);vertical-align:top">®</span></a>
   <nav>${(() => { const m = state.machines.find((x) => x.status === "open"); return m ? `<a href="/machine/${m.id}" style="color:var(--signal)">Candy Machine</a>` : ""; })()}<a href="/raffles">Raffles</a><a href="/vault">The Vault</a><a href="/grades">Receipts</a><a href="/feed">Live Feed</a></nav>
-  ${cfg.live ? `<span class="livetag">● LIVE${cfg.devnet ? " · DEVNET" : ""}</span>` : `<span class="papertag">● PAPER MODE</span>`}
+  <div style="display:flex;gap:14px;align-items:center">
+    ${cfg.xUrl ? `<a class="xlink" href="${cfg.xUrl}" target="_blank" rel="noopener" aria-label="X">𝕏</a>` : ""}
+    ${cfg.live ? `<span class="livetag">● LIVE${cfg.devnet ? " · DEVNET" : ""}</span>` : `<span class="papertag">● PAPER MODE</span>`}
+  </div>
 </header>
 ${ticker ? (() => {
   // repeat short content so one copy always exceeds the viewport, then
@@ -254,8 +269,18 @@ ${body}
   <div class="big">THE HOUSE HAS NO EDGE.<br>THE MACHINE JUST BUYS BETTER.</div>
   <p>Every draw committed on-chain before a single ticket exists. Paper mode: real market data,
   real cryptography, fake money — until the math proves itself.</p>
+  ${cfg.xUrl ? `<a class="xfoot" href="${cfg.xUrl}" target="_blank" rel="noopener">𝕏 · FOLLOW THE MACHINE</a>` : ""}
 </footer>
-<script>setTimeout(()=>location.reload(), 45000)</script>
+<script>
+setTimeout(()=>location.reload(), 45000);
+document.querySelectorAll('.capill[data-ca]').forEach(el=>{
+  el.onclick=async()=>{
+    try{await navigator.clipboard.writeText(el.dataset.ca);}catch(e){
+      const t=document.createElement('textarea');t.value=el.dataset.ca;document.body.appendChild(t);t.select();document.execCommand('copy');t.remove();}
+    const c=el.querySelector('.cpy'),o=c.textContent;c.textContent='copied!';setTimeout(()=>c.textContent=o,1600);
+  };
+});
+</script>
 </body></html>`;
 }
 
@@ -338,6 +363,10 @@ export function mountSite(app: express.Express): void {
     <p class="deck">The machine snipes graded cards <em>below market</em>, then raffles them at
     <em>exactly their value</em>. Its only profit is the discount it caught. Your odds are
     committed on-chain <em>before tickets exist</em>.</p>
+    ${cfg.tokenMint ? `<button class="capill" data-ca="${cfg.tokenMint}" title="click to copy">
+      <small>CA</small><code>${cfg.tokenMint.slice(0, 6)}…${cfg.tokenMint.slice(-6)}</code><span class="cpy">⧉ copy</span>
+    </button>` : `<div class="capill soon"><small>CA</small><code>coming soon</code></div>`}
+    <br>
     <a class="cta" href="/raffles"><small>${live.length} live raffle${live.length === 1 ? "" : "s"} right now</small><b>ENTER THE MACHINE</b><span>↗</span></a>
   </div>
   <div class="herofan">
@@ -642,6 +671,85 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
   <table class="inst"><tr><th>card</th><th>paid</th><th>comp</th><th>outcome</th><th>detail</th></tr>
   ${rows || `<tr><td colspan="5" class="dim">first grades land a few hours after the first paper buys</td></tr>`}</table>
 </section>`));
+  });
+
+  app.get("/admin", (_req, res) => {
+    res.type("html").send(shell("admin", `
+<section style="max-width:760px">
+  <h2>MACHINE <i>CONTROLS.</i></h2>
+  <p class="side">OPERATOR ONLY — THE KEY NEVER LEAVES YOUR BROWSER</p>
+  <div class="receipts" style="margin-top:0">
+    <h3>ACCESS</h3>
+    <input id="key" type="password" placeholder="admin key" style="width:100%;padding:12px 14px;border-radius:10px;border:2px solid var(--edge);background:#0d1016;color:var(--cream);font:700 14px var(--mono)">
+    <button class="cta" id="load" style="margin-top:14px;padding:10px 20px"><b>UNLOCK</b></button>
+    <p id="amsg" class="dim" style="margin-top:10px;font-size:13px"></p>
+  </div>
+  <div id="panel" style="display:none">
+    <div class="receipts"><h3>STATUS</h3><table id="stat"></table></div>
+    <div class="receipts">
+      <h3>SETTINGS</h3>
+      <p class="dim" style="font-size:12px;margin-bottom:6px">token contract address (shows in the hero with click-to-copy)</p>
+      <input id="ca" placeholder="token CA (mint address)" style="width:100%;padding:10px 12px;border-radius:10px;border:2px solid var(--edge);background:#0d1016;color:var(--cream);font:700 13px var(--mono)">
+      <p class="dim" style="font-size:12px;margin:12px 0 6px">X profile URL (header + footer link)</p>
+      <input id="xu" placeholder="https://x.com/…" style="width:100%;padding:10px 12px;border-radius:10px;border:2px solid var(--edge);background:#0d1016;color:var(--cream);font:700 13px var(--mono)">
+      <button class="cta" id="saveset" style="margin-top:14px;padding:10px 20px"><b>SAVE SETTINGS</b></button>
+    </div>
+    <div class="receipts">
+      <h3>THE SWITCH</h3>
+      <p style="font-size:13px;margin-bottom:12px">Live mode = the sniper spends <b>real USDC</b> on mainnet, commitments go
+      on-chain, payments/refunds/prizes move for real, and the simulator stops. Paper mode simulates everything.</p>
+      <button class="cta" id="livebtn" style="padding:12px 22px"><b>…</b></button>
+      <button class="cta" id="haltbtn" style="padding:12px 22px;background:var(--red);box-shadow:0 6px 0 #8f2222"><b>…</b></button>
+      <p id="lmsg" class="dim" style="margin-top:10px;font-size:13px"></p>
+    </div>
+  </div>
+</section>
+<script>
+const $=id=>document.getElementById(id);
+const hdr=()=>({'content-type':'application/json','x-admin-key':$('key').value.trim()});
+let st=null;
+$('key').value=localStorage.getItem('nerdkey')||'';
+async function refresh(){
+  const r=await fetch('/api/admin/status',{headers:hdr()});
+  if(r.status===403){$('amsg').textContent='wrong key (or ADMIN_KEY not set in env)';$('panel').style.display='none';return;}
+  st=await r.json();
+  localStorage.setItem('nerdkey',$('key').value.trim());
+  $('amsg').textContent='';$('panel').style.display='block';
+  $('stat').innerHTML=[
+    ['mode', st.live?(st.devnet?'LIVE — devnet':'🔴 LIVE — MAINNET'):'paper'],
+    ['halted', st.halted?'YES — nothing buys or pays':'no'],
+    ['wallet', st.wallet],
+    ['SOL / USDC', st.sol+' / $'+st.usdc],
+    ['vault / raffles / machine', st.vault+' cards / '+st.openRaffles+' open / '+(st.openMachine?'running':'none')],
+    ['payouts pending / stuck', st.payouts.pending+' / '+st.payouts.stuck.length],
+    ['token CA', st.tokenMint||'— not set'],
+    ['X', st.xUrl||'— not set'],
+  ].map(r=>'<tr><td>'+r[0]+'</td><td>'+r[1]+'</td></tr>').join('');
+  $('ca').value=st.tokenMint||'';$('xu').value=st.xUrl||'';
+  $('livebtn').querySelector('b').textContent=st.live?'SWITCH TO PAPER':'GO LIVE (MAINNET)';
+  $('haltbtn').querySelector('b').textContent=st.halted?'RESUME MACHINE':'EMERGENCY HALT';
+}
+$('load').onclick=refresh;
+$('saveset').onclick=async()=>{
+  await fetch('/api/admin/settings',{method:'POST',headers:hdr(),body:JSON.stringify({tokenMint:$('ca').value.trim(),xUrl:$('xu').value.trim()})});
+  $('lmsg').textContent='settings saved';refresh();
+};
+$('livebtn').onclick=async()=>{
+  const goingLive=!st.live;
+  if(goingLive&&!confirm('GO LIVE?
+
+The machine starts spending REAL USDC from wallet
+'+st.wallet+'
+from this moment. Sure?'))return;
+  await fetch('/api/admin/settings',{method:'POST',headers:hdr(),body:JSON.stringify({live:goingLive})});
+  $('lmsg').textContent=goingLive?'MACHINE IS LIVE':'back to paper';refresh();
+};
+$('haltbtn').onclick=async()=>{
+  await fetch('/api/admin/halt',{method:'POST',headers:hdr(),body:JSON.stringify({on:!st.halted,why:'admin panel'})});
+  refresh();
+};
+if($('key').value)refresh();
+</script>`));
   });
 
   app.get("/feed", (_req, res) => {

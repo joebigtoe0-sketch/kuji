@@ -36,7 +36,7 @@ export function seededHolders(): { wallet: string; balance: number }[] {
 }
 
 export function simTick(): void {
-  if (!cfg.simBuyers) return;
+  if (cfg.live || !cfg.simBuyers) return; // sim NEVER runs against real money
   const open = state.raffles.filter((r) => r.kind === "paid" && r.status === "open");
   for (const r of open) {
     const soldN = r.sold.reduce((s, t) => s + t.n, 0);

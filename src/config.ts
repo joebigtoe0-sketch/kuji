@@ -18,16 +18,33 @@ fs.mkdirSync(dataDir, { recursive: true });
 const bool = (k: string, def: boolean) =>
   (process.env[k] ?? String(def)).toLowerCase() === "true";
 
-const live = bool("LIVE_MODE", false);
+const envLive = bool("LIVE_MODE", false);
 const devnet = bool("DEVNET", false);
+
+/**
+ * Runtime settings (admin panel) — override env, survive restarts.
+ * The live toggle lives here: flipping it switches the machine to real
+ * mainnet operation from that moment, no restart needed.
+ */
+interface Runtime { live?: boolean; tokenMint?: string; xUrl?: string }
+const RUNTIME_FILE = path.join(dataDir, "settings.json");
+const runtime: Runtime = (() => {
+  try { return JSON.parse(fs.readFileSync(RUNTIME_FILE, "utf8")); } catch { return {}; }
+})();
+export function setRuntime(patch: Runtime): Runtime {
+  for (const [k, v] of Object.entries(patch)) if (v !== undefined) (runtime as any)[k] = v;
+  fs.writeFileSync(RUNTIME_FILE, JSON.stringify(runtime, null, 1));
+  return { ...runtime };
+}
+export const getRuntime = (): Runtime => ({ ...runtime });
 
 export const cfg = {
   root,
   dataDir,
   port: num("PORT", 8630),
   /** paper = simulation with receipts. live = real chain. Never both. */
-  paper: !live,
-  live,
+  get live() { return runtime.live ?? envLive; },
+  get paper() { return !(runtime.live ?? envLive); },
   devnet,
   paperBudget: num("PAPER_BUDGET", 500),
 
@@ -36,7 +53,8 @@ export const cfg = {
   usdcMint: str("USDC_MINT", devnet
     ? "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr" // USDC-Dev — what CC devnet actually trades in (mintable by anyone via the spl-token-faucet program)
     : "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
-  tokenMint: str("TOKEN_MINT"), // our launched token (holder raffles) — empty until launch
+  get tokenMint() { return runtime.tokenMint ?? str("TOKEN_MINT"); }, // our launched token (CA) — admin-settable
+  get xUrl() { return runtime.xUrl ?? str("X_URL"); }, // the project's X profile — admin-settable
   ansemMint: str("ANSEM_MINT"), // $ANSEM — holder-raffle weight boost + ticket currency
   ansemBoost: num("ANSEM_BOOST", 1.5), // holder-raffle entry multiplier for ANSEM holders
   ansemMinUsd: num("ANSEM_MIN", 10), // min ANSEM (ui amount) to qualify for the boost

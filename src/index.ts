@@ -1,6 +1,6 @@
 import express from "express";
 import crypto from "node:crypto";
-import { cfg } from "./config.js";
+import { cfg, setRuntime } from "./config.js";
 import { log } from "./log.js";
 import { state, save, ledgerTail, ledger } from "./store.js";
 import { scan } from "./sniper.js";
@@ -138,6 +138,10 @@ app.get("/api/admin/status", async (req, res) => {
   if (!admin(req)) return res.status(403).json({ ok: false });
   res.json({
     live: cfg.live, devnet: cfg.devnet, halted: halted(),
+    tokenMint: cfg.tokenMint, xUrl: cfg.xUrl,
+    vault: state.vault.filter((v) => v.status === "vault").length,
+    openRaffles: state.raffles.filter((r) => r.status === "open").length,
+    openMachine: state.machines.some((m) => m.status === "open"),
     wallet: walletPk.toBase58(),
     sol: await solBalance().catch(() => -1),
     usdc: await usdcBalance().catch(() => -1),
@@ -145,6 +149,25 @@ app.get("/api/admin/status", async (req, res) => {
     suspectCards: state.vault.filter((v) => v.status === "vault" && (v.compUsd - v.paidUsd) / v.compUsd > cfg.maxEdge)
       .map((v) => ({ nft: v.nft, item: v.itemName, paid: v.paidUsd, comp: v.compUsd })),
   });
+});
+// runtime settings: token CA, X link, and THE LIVE TOGGLE — flipping live
+// starts real mainnet operation (sniper buys with real USDC) immediately
+app.post("/api/admin/settings", (req, res) => {
+  if (!admin(req)) return res.status(403).json({ ok: false });
+  const wasLive = cfg.live;
+  const patch: Record<string, unknown> = {};
+  if (typeof req.body?.tokenMint === "string") patch.tokenMint = req.body.tokenMint.trim();
+  if (typeof req.body?.xUrl === "string") patch.xUrl = req.body.xUrl.trim();
+  if (typeof req.body?.live === "boolean") patch.live = req.body.live;
+  const now = setRuntime(patch);
+  if (!wasLive && cfg.live) {
+    ledger("admin-LIVE", { at: Date.now(), wallet: walletPk.toBase58() });
+    log.info("admin", `🔴 MACHINE IS LIVE — real ${cfg.devnet ? "devnet" : "MAINNET"} operation from now on (wallet ${walletPk.toBase58()})`);
+  } else if (wasLive && cfg.live === false) {
+    ledger("admin-paper", { at: Date.now() });
+    log.info("admin", "machine back to PAPER mode");
+  }
+  res.json({ ok: true, settings: now, live: cfg.live });
 });
 // re-price a suspect card after human review (unblocks it for raffling)
 app.post("/api/admin/reprice", (req, res) => {
@@ -182,6 +205,7 @@ app.get("/api/verify/:id", (req, res) => {
 mountSite(app);
 
 // ---------- jobs ----------
+const envLiveBoot = cfg.live; // bind host by boot state; the toggle changes behavior, not the socket
 setInterval(() => void scan().catch((e) => log.warn("sniper", String(e).slice(0, 100))), cfg.scanEveryMin * 60_000);
 setTimeout(() => void scan().catch((e) => log.warn("sniper", String(e).slice(0, 100))), 3000);
 setInterval(() => void tickRaffles().catch(() => {}), 30_000);
@@ -194,14 +218,12 @@ setInterval(() => void gradeVault().catch(() => {}), 5 * 60_000);
 setInterval(() => void autoRaffle().catch((e) => log.warn("raffle", String(e).slice(0, 80))), 45_000);
 setInterval(() => void autoMachine().catch((e) => log.warn("capsule", String(e).slice(0, 80))), 50_000);
 setInterval(() => { try { tickMarket(); } catch {} }, 30_000);
-if (cfg.live) {
-  setInterval(() => void watchPayments().catch((e) => log.warn("pay", String(e).slice(0, 100))), cfg.payWatchEverySec * 1000);
-  setInterval(() => void tickPayouts().catch((e) => log.warn("payout", String(e).slice(0, 100))), 20_000);
-} else {
-  setInterval(() => { try { simTick(); } catch {} }, cfg.simBuyEverySec * 1000);
-}
+// live/paper is a RUNTIME flag (admin toggle) — gate inside each tick, not at boot
+setInterval(() => { if (cfg.live) void watchPayments().catch((e) => log.warn("pay", String(e).slice(0, 100))); }, cfg.payWatchEverySec * 1000);
+setInterval(() => { if (cfg.live) void tickPayouts().catch((e) => log.warn("payout", String(e).slice(0, 100))); }, 20_000);
+setInterval(() => { if (!cfg.live) try { simTick(); } catch {} }, cfg.simBuyEverySec * 1000);
 
-app.listen(cfg.port, cfg.live ? "0.0.0.0" : "127.0.0.1", () => {
+app.listen(cfg.port, process.env.HOST ?? (envLiveBoot ? "0.0.0.0" : "127.0.0.1"), () => {
   log.info("nerd", `${cfg.live ? (cfg.devnet ? "LIVE (devnet)" : "LIVE (MAINNET)") : "paper"} machine on port ${cfg.port} — wallet ${walletPk.toBase58()}, vault ${state.vault.length} cards${halted() ? " — ⚠ HALTED" : ""}`);
   save();
 });
