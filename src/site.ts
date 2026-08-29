@@ -1041,14 +1041,21 @@ async function refresh(){
         '<span style="flex:1;font-size:13px">'+r.title.slice(0,40)+'</span>'+
         '<span style="opacity:.6;font-size:12px">$'+r.ticketUsd+'/tix · '+r.left+' left</span>'+
         '<input type="number" min="1" max="'+r.left+'" value="1" class="gn" data-r="'+r.id+'" style="width:60px;padding:6px 8px;border-radius:8px;border:2px solid var(--edge);background:#0d1016;color:var(--cream);font:700 13px var(--mono)">'+
-        '<button class="gv" data-r="'+r.id+'" data-p="'+r.ticketUsd+'" style="cursor:pointer;background:var(--signal);color:#04101f;border:0;border-radius:999px;padding:6px 12px;font:900 10px var(--lab);letter-spacing:.1em">GIVE AWAY</button></div>').join('')
+        '<button class="gv" data-r="'+r.id+'" data-p="'+r.ticketUsd+'" style="cursor:pointer;background:var(--signal);color:#04101f;border:0;border-radius:999px;padding:6px 12px;font:900 10px var(--lab);letter-spacing:.1em">GIVE AWAY</button></div>').join('')+
+      '<label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:12.5px">'+
+      '<input type="checkbox" id="gfund"'+(st.holderPoolUsd>0?'':' checked')+'> '+
+      'operator-funded (the machine covers the seats out of what the raffle earns, instead of the holder pool)</label>' 
     : '<p class="dim" style="font-size:13px">no open paid raffles to give seats in</p>';
   document.querySelectorAll('.gv').forEach(b=>{b.onclick=async()=>{
     const n=Number(document.querySelector('.gn[data-r="'+b.dataset.r+'"]').value)||1;
     const cost=(n*Number(b.dataset.p)).toFixed(2);
-    if(!confirm('Give away '+n+' ticket(s)? The pool pays $'+cost+' face value for them now.'))return;
+    const fp=!document.getElementById('gfund').checked;
+    if(!confirm('Give away '+n+' ticket(s)?
+
+'+(fp?'The holder pool pays $'+cost+' for them now.':'The machine covers $'+cost+' out of what this raffle earns.')))return;
     b.textContent='…';
-    const j=await (await fetch('/api/admin/ticket-giveaway',{method:'POST',headers:hdr(),body:JSON.stringify({raffle:b.dataset.r,tickets:n})})).json();
+    const fromPool=!document.getElementById('gfund').checked;
+    const j=await (await fetch('/api/admin/ticket-giveaway',{method:'POST',headers:hdr(),body:JSON.stringify({raffle:b.dataset.r,tickets:n,fromPool})})).json();
     $('gmsg').textContent=j.ok?('giveaway open — '+j.tickets+' ticket(s) worth $'+j.faceUsd+' to '+j.entrants+' holders'):j.why;
     refresh();
   };});

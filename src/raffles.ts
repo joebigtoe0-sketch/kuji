@@ -200,14 +200,18 @@ export async function tickRaffles(): Promise<void> {
       } else if (card) card.status = r.kind === "paid" ? "awarded" : "holder_prize";
       if (r.kind === "paid" && card) {
         // proceeds return; the SPREAD is realized profit; half funds holder raffles
-        const proceeds = r.tickets * r.ticketUsd;
+        // Seats the operator donated were never paid for by anyone, so they
+        // are not income. Pool-funded seats ARE counted: the holder pool is
+        // money the machine already holds and genuinely spent on them.
+        const donated = r.donatedUsd ?? 0;
+        const proceeds = +(r.tickets * r.ticketUsd - donated).toFixed(2);
         const profit = +(proceeds - card.paidUsd).toFixed(2);
         if (!cfg.live) state.walletUsd += proceeds; // live: the money already arrived on-chain
         state.realizedProfitUsd += profit;
         const toPool = +(Math.max(0, profit) * cfg.holderRaffleShare).toFixed(2);
         state.holderPoolUsd += toPool; // live: an earmark inside the same wallet
         if (!cfg.live) state.walletUsd -= toPool;
-        ledger("profit", { raffle: r.id, proceeds, cost: card.paidUsd, profit, toHolderPool: toPool });
+        ledger("profit", { raffle: r.id, proceeds, donatedUsd: donated || undefined, cost: card.paidUsd, profit, toHolderPool: toPool });
       }
       // the prize: the NFT goes to the winner's wallet (live buyers ARE wallets).
       // Physical redemption is theirs via Collector Crypt's vault afterwards.
@@ -260,7 +264,7 @@ export async function createTicketGiveaway(
   if (nTickets < 1 || nTickets > left) throw new Error(`only ${left} ticket(s) left in that raffle`);
   const cost = +(nTickets * target.ticketUsd).toFixed(2);
   if (opts.fromPool && state.holderPoolUsd < cost)
-    throw new Error(`holder pool has $${state.holderPoolUsd.toFixed(2)}, needs $${cost.toFixed(2)}`);
+    throw new Error(`holder pool has $${state.holderPoolUsd.toFixed(2)}, needs $${cost.toFixed(2)}. Use operator-funded instead — the machine covers the seats out of what this raffle earns.`);
 
   const slotNow = await currentSlot();
   const resolveSlot = slotNow + Math.round(0.5 * SLOTS_PER_HOUR);
@@ -285,6 +289,7 @@ export async function createTicketGiveaway(
   r.commitSig = await publishCommit(id, r.commitHash, resolveSlot);
   // pay for the seats now and park them
   if (opts.fromPool) state.holderPoolUsd = +(state.holderPoolUsd - cost).toFixed(2);
+  else target.donatedUsd = +((target.donatedUsd ?? 0) + cost).toFixed(2);
   target.sold.push({ buyer: GIVEAWAY_HOLDER(id), n: nTickets, paidUsd: cost, at: Date.now() });
   state.raffles.push(r);
   save();

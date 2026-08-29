@@ -50,6 +50,10 @@ export interface Raffle {
   winnerIndex?: number; // the drawn ticket index — stored so verification never reconstructs it
   /** What the winner receives. Default (absent) = the card at `nft`.
    *  "tickets" = seats in another, still-open raffle. */
+  /** Face value of seats the OPERATOR donated (not paid for by a buyer and
+   *  not taken from the holder pool). Subtracted from proceeds so a
+   *  giveaway cannot invent income the machine never received. */
+  donatedUsd?: number;
   prizeKind?: "tickets";
   prizeRaffleId?: string;
   prizeTickets?: number;
