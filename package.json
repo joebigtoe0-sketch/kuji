@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "newwallet": "tsx scripts/newwallet.ts",
     "checkdeps": "tsx scripts/checkdeps.ts",
-    "verify": "npm run checkdeps && npm run typecheck"
+    "verify": "npm run checkdeps && npm run typecheck && npm run checkpages",
+    "checkpages": "tsx scripts/checkpages.ts"
   },
   "dependencies": {
     "@solana/spl-token": "^0.4.15",

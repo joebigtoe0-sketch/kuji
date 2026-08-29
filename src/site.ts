@@ -1050,9 +1050,7 @@ async function refresh(){
     const n=Number(document.querySelector('.gn[data-r="'+b.dataset.r+'"]').value)||1;
     const cost=(n*Number(b.dataset.p)).toFixed(2);
     const fp=!document.getElementById('gfund').checked;
-    if(!confirm('Give away '+n+' ticket(s)?
-
-'+(fp?'The holder pool pays $'+cost+' for them now.':'The machine covers $'+cost+' out of what this raffle earns.')))return;
+    if(!confirm('Give away '+n+' ticket(s)? '+(fp?'The holder pool pays $'+cost+' for them now.':'The machine covers $'+cost+' out of what this raffle earns.')))return;
     b.textContent='…';
     const fromPool=!document.getElementById('gfund').checked;
     const j=await (await fetch('/api/admin/ticket-giveaway',{method:'POST',headers:hdr(),body:JSON.stringify({raffle:b.dataset.r,tickets:n,fromPool})})).json();
