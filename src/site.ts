@@ -349,15 +349,45 @@ document.querySelectorAll('.capill[data-ca]').forEach(el=>{
 </body></html>`;
 }
 
+/**
+ * Ticket artwork for giveaways whose prize is seats rather than a card.
+ * Inline SVG so it needs no asset and stays crisp at any size; drawn in
+ * the brand palette. A giveaway used to borrow the target card's image,
+ * which made it look like a duplicate listing of that same raffle.
+ */
+function ticketArt(n: number, subtitle: string): string {
+  return `<svg viewBox="0 0 320 200" width="86%" style="max-height:230px" role="img" aria-label="${n} raffle tickets">
+  <defs>
+    <linearGradient id="tg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8ff7e4"/><stop offset="55%" stop-color="#2ee6c8"/><stop offset="100%" stop-color="#0e7f78"/>
+    </linearGradient>
+  </defs>
+  <g transform="rotate(-7 160 100)">
+    <path d="M28 34h264a10 10 0 0 1 10 10v34a22 22 0 0 0 0 44v34a10 10 0 0 1-10 10H28a10 10 0 0 1-10-10v-34a22 22 0 0 0 0-44V44a10 10 0 0 1 10-10z"
+      fill="url(#tg)" stroke="#04283d" stroke-width="7" stroke-linejoin="round"/>
+    <line x1="196" y1="46" x2="196" y2="154" stroke="#04283d" stroke-width="5" stroke-dasharray="11 10" stroke-linecap="round"/>
+    <text x="104" y="118" text-anchor="middle" font-family="Lilita, Arial Rounded MT Bold, sans-serif" font-size="72" fill="#04283d">${n}</text>
+    <text x="104" y="146" text-anchor="middle" font-family="Nunito, sans-serif" font-weight="900" font-size="17" letter-spacing="2.5" fill="#04283d">${n === 1 ? "TICKET" : "TICKETS"}</text>
+    <text x="245" y="86" text-anchor="middle" font-family="Lilita, Arial Rounded MT Bold, sans-serif" font-size="27" fill="#04283d">KUJI</text>
+    <text x="245" y="112" text-anchor="middle" font-family="Nunito, sans-serif" font-weight="900" font-size="11" letter-spacing="1.4" fill="#04283d">FREE DRAW</text>
+    <text x="245" y="132" text-anchor="middle" font-family="Nunito, sans-serif" font-weight="700" font-size="9.5" fill="#0a3a5c">${subtitle.slice(0, 18)}</text>
+  </g></svg>`;
+}
+
 function prodCard(r: any, card: any): string {
   const sold = r.sold.reduce((s: number, t: any) => s + t.n, 0);
   const pct = Math.min(100, (100 * sold) / r.tickets);
+  const isTickets = r.prizeKind === "tickets";
   const ribbon = r.status === "resolved" ? `<span class="ribbon won">WON</span>`
     : r.status === "refunded" ? `<span class="ribbon dead">REFUNDED</span>`
+    : isTickets ? `<span class="ribbon free">FREE — WIN TICKETS</span>`
     : r.kind === "holder" ? `<span class="ribbon free">FREE — HOLDERS</span>`
     : `<span class="ribbon">LIVE</span>`;
+  const art = isTickets
+    ? ticketArt(r.prizeTickets ?? 1, card?.itemName ?? "")
+    : card?.image ? `<img src="${card.image}" loading="lazy" alt="">` : `<div class="none">?</div>`;
   return `<a class="prod" href="/raffle/${r.id}">
-  <div class="art">${card?.image ? `<img src="${card.image}" loading="lazy" alt="">` : `<div class="none">?</div>`}${ribbon}</div>
+  <div class="art">${art}${ribbon}</div>
   <div class="bd">
     <h3>${r.title.slice(0, 52)}</h3>
     <div class="meta">
@@ -504,13 +534,22 @@ ${done.length ? `<section>
     const pct = Math.min(100, (100 * sold) / r.tickets);
     res.type("html").send(shell(r.title.slice(0, 40), `
 <section>
-  <p class="lab" style="color:var(--acid)">${r.kind === "paid" ? "PAID RAFFLE — FILL OR REFUND" : "FREE HOLDER DROP — HOLDING IS THE TICKET"} · ${r.status.toUpperCase()}</p>
+  <p class="lab" style="color:var(--acid)">${r.kind === "paid" ? "PAID RAFFLE — FILL OR REFUND" : r.prizeKind === "tickets" ? "FREE HOLDER DROP — WIN TICKETS, NOT THE CARD" : "FREE HOLDER DROP — HOLDING IS THE TICKET"} · ${r.status.toUpperCase()}</p>
   <div class="case">
-    <div class="art">${card?.image ? `<img src="${card.image}" alt="">` : ""}${r.winner ? `<div class="bigstamp">WON · ${r.winner}</div>` : ""}</div>
+    <div class="art">${r.prizeKind === "tickets"
+      ? ticketArt(r.prizeTickets ?? 1, card?.itemName ?? "")
+      : card?.image ? `<img src="${card.image}" alt="">` : ""}${r.winner ? `<div class="bigstamp">WON · ${r.winner}</div>` : ""}</div>
     <div class="txt">
       <span class="lab">${card ? `${card.gradingCompany} ${card.grade}` : ""}</span>
       <h2>${r.title.slice(0, 70)}</h2>
-      ${card ? `<div class="duel">
+      ${r.prizeKind === "tickets" ? `<div class="duel">
+        <div><small>you win</small><b>${r.prizeTickets} ticket${r.prizeTickets === 1 ? "" : "s"}</b></div>
+        <div><small>in</small><b style="font-size:1rem">${(state.raffles.find((x) => x.id === r.prizeRaffleId)?.title ?? "").slice(0, 26)}</b></div>
+      </div>
+      <p style="font:600 12.5px var(--body)">Not the card itself: the winner receives seats in that raffle,
+      already paid for out of the profit pool, and takes their chance at the card like everyone else.
+      ${r.prizeRaffleId ? `<a href="/raffle/${r.prizeRaffleId}" style="color:#0d6b5c;font-weight:800">See that raffle →</a>` : ""}</p>
+      ` : card ? `<div class="duel">
         <div><small>machine paid</small><b>${usd(card.paidUsd)}</b></div>
         <div><small>market says</small><b>${usd(card.compUsd)}</b></div>
       </div>
