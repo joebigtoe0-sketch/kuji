@@ -182,7 +182,22 @@ export async function tickRaffles(): Promise<void> {
       r.status = "resolved";
       r.resolvedAt = Date.now();
 
-      if (card) card.status = r.kind === "paid" ? "awarded" : "holder_prize";
+      // a ticket giveaway moves the parked seats to the winner instead
+      if (r.prizeKind === "tickets") {
+        const target = state.raffles.find((x) => x.id === r.prizeRaffleId);
+        const parked = target?.sold.find((t) => t.buyer === GIVEAWAY_HOLDER(r.id));
+        if (target && parked && r.winner) {
+          if (target.status === "open") {
+            parked.buyer = r.winner;
+            log.info("raffle", `${r.prizeTickets} ticket(s) in ${target.id} handed to ${r.winner}`);
+          } else {
+            // target resolved or refunded while we were drawing — pay the
+            // face value instead so the winner is not left with nothing
+            if (cfg.live) queuePayout({ kind: "usdc", to: r.winner, amountUsd: parked.paidUsd, raffleId: r.id, reason: `ticket giveaway: ${target.id} closed before the draw, paid face value instead` });
+            ledger("giveaway-cashout", { raffle: r.id, target: target.id, winner: r.winner, usd: parked.paidUsd });
+          }
+        }
+      } else if (card) card.status = r.kind === "paid" ? "awarded" : "holder_prize";
       if (r.kind === "paid" && card) {
         // proceeds return; the SPREAD is realized profit; half funds holder raffles
         const proceeds = r.tickets * r.ticketUsd;
@@ -196,7 +211,7 @@ export async function tickRaffles(): Promise<void> {
       }
       // the prize: the NFT goes to the winner's wallet (live buyers ARE wallets).
       // Physical redemption is theirs via Collector Crypt's vault afterwards.
-      if (cfg.live && r.winner)
+      if (cfg.live && r.winner && r.prizeKind !== "tickets")
         queuePayout({ kind: "nft", to: r.winner, nft: r.nft, raffleId: r.id, reason: `raffle prize (ticket ${idx + 1}/${total})` });
       r.revealSig = await publishReveal(r.id, seed, blockhash, idx);
       save();
@@ -217,6 +232,65 @@ export async function tickHolderRaffles(holders: { wallet: string; balance: numb
     .sort((a, b) => b.compUsd - a.compUsd)[0];
   if (!candidate || !holders.length) return;
   await createHolderRaffle(candidate, holders, { fromPool: true });
+}
+
+/** Placeholder buyer that parks giveaway tickets until a winner is drawn. */
+export const GIVEAWAY_HOLDER = (id: string) => `KUJI-GIVEAWAY-${id}`;
+
+/**
+ * Give away seats in a live paid raffle, free, to token holders.
+ *
+ * The tickets are BOUGHT at face value out of the holder pool the moment
+ * the giveaway opens, and parked under a placeholder buyer until the draw.
+ * That matters: a paid raffle only covers the card because every ticket is
+ * paid for. Handing out free seats would leave the card underfunded and
+ * quietly break the zero-edge promise for everyone who bought normally.
+ * Reserving them up front also stops someone else buying the same seats
+ * while the giveaway is running.
+ */
+export async function createTicketGiveaway(
+  target: Raffle,
+  nTickets: number,
+  holders: { wallet: string; balance: number }[],
+  opts: { fromPool: boolean },
+): Promise<Raffle> {
+  if (target.kind !== "paid" || target.status !== "open") throw new Error("target raffle is not open for tickets");
+  if (!holders.length) throw new Error("no holders to raffle to");
+  const left = target.tickets - target.sold.reduce((s, t) => s + t.n, 0);
+  if (nTickets < 1 || nTickets > left) throw new Error(`only ${left} ticket(s) left in that raffle`);
+  const cost = +(nTickets * target.ticketUsd).toFixed(2);
+  if (opts.fromPool && state.holderPoolUsd < cost)
+    throw new Error(`holder pool has $${state.holderPoolUsd.toFixed(2)}, needs $${cost.toFixed(2)}`);
+
+  const slotNow = await currentSlot();
+  const resolveSlot = slotNow + Math.round(0.5 * SLOTS_PER_HOUR);
+  const id = crypto.randomBytes(6).toString("hex");
+  const seed = makeSeed();
+  const entries = holders.map((h) => ({ wallet: h.wallet, n: Math.max(1, Math.floor(h.balance)) }));
+  const total = entries.reduce((s, e) => s + e.n, 0);
+  const manifest = JSON.stringify({
+    id, prize: { kind: "tickets", raffle: target.id, item: target.title, tickets: nTickets, faceUsd: cost },
+    snapshot: entries, rule: "free holder raffle, entries = balance",
+  });
+  const r: Raffle = {
+    id, kind: "holder", nft: target.nft,
+    title: `HOLDER DROP — ${nTickets} ticket${nTickets === 1 ? "" : "s"} in ${target.title.slice(0, 44)}`,
+    tickets: total, ticketUsd: 0,
+    sold: entries.map((e) => ({ buyer: e.wallet, n: e.n, paidUsd: 0, at: Date.now() })),
+    createdAt: Date.now(), fillDeadline: Date.now(), resolveSlot,
+    commitHash: commitHash(manifest, seed, resolveSlot), status: "open",
+    prizeKind: "tickets", prizeRaffleId: target.id, prizeTickets: nTickets,
+  };
+  saveSeed(id, seed);
+  r.commitSig = await publishCommit(id, r.commitHash, resolveSlot);
+  // pay for the seats now and park them
+  if (opts.fromPool) state.holderPoolUsd = +(state.holderPoolUsd - cost).toFixed(2);
+  target.sold.push({ buyer: GIVEAWAY_HOLDER(id), n: nTickets, paidUsd: cost, at: Date.now() });
+  state.raffles.push(r);
+  save();
+  ledger("holder-raffle-open", { id, prize: "tickets", targetRaffle: target.id, tickets: nTickets, faceUsd: cost, entrants: entries.length, entries: total, poolSpent: opts.fromPool ? cost : 0, commit: r.commitHash, resolveSlot });
+  log.info("raffle", `HOLDER DROP ${id}: ${nTickets} ticket(s) in ${target.id} ($${cost} ${opts.fromPool ? "from the pool" : "operator-funded"}) to ${entries.length} holders`);
+  return r;
 }
 
 /**

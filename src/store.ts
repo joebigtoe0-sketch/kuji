@@ -48,6 +48,11 @@ export interface Raffle {
   blockhash?: string; // the real chain blockhash used
   winner?: string;
   winnerIndex?: number; // the drawn ticket index — stored so verification never reconstructs it
+  /** What the winner receives. Default (absent) = the card at `nft`.
+   *  "tickets" = seats in another, still-open raffle. */
+  prizeKind?: "tickets";
+  prizeRaffleId?: string;
+  prizeTickets?: number;
   status: "open" | "refunded" | "resolved";
   resolvedAt?: number;
 }

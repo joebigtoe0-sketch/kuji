@@ -18,8 +18,8 @@ import { snapshotHolders, holderReport } from "./holders.js";
 import { halted, setHalt } from "./halt.js";
 import { walletPk, solBalance, usdcBalance, walletSource } from "./wallet.js";
 import { hasDas, ownsAsset, assetInfo } from "./assets.js";
-import { purgeDemo } from "./purge.js";
-import { createHolderRaffle, totalEntries } from "./raffles.js";
+import { purgeDemo, isReal } from "./purge.js";
+import { createHolderRaffle, createTicketGiveaway, totalEntries } from "./raffles.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -190,6 +190,10 @@ app.get("/api/admin/status", async (req, res) => {
     sol: await solBalance().catch(() => -1),
     usdc: await usdcBalance().catch(() => -1),
     payouts: { pending: pendingPayouts().length, stuck: stuckPayouts() },
+    openPaidRaffles: state.raffles.filter((r) => r.kind === "paid" && r.status === "open" && isReal(r))
+      .map((r) => ({ id: r.id, title: r.title, ticketUsd: r.ticketUsd,
+        left: r.tickets - r.sold.reduce((s, t) => s + t.n, 0) })),
+    holderPoolUsd: +state.holderPoolUsd.toFixed(2),
     vaultCards: state.vault.filter((v) => v.status === "vault")
       .map((v) => ({ nft: v.nft, item: v.itemName, paid: v.paidUsd, comp: v.compUsd })),
     demoLeftovers: state.raffles.filter((r) => r.status === "open" && !r.commitSig).length
@@ -353,6 +357,25 @@ app.post("/api/admin/machine", async (req, res) => {
     res.json({ ok: true, id: m.id, capsules: m.capsules, startPriceUsd: m.priceUsd, cards: cards.length });
   } catch (e) {
     res.json({ ok: false, why: String(e).slice(0, 160) });
+  }
+});
+
+/** Give away seats in a live paid raffle, free, to token holders. */
+app.post("/api/admin/ticket-giveaway", async (req, res) => {
+  if (!admin(req)) return res.status(403).json({ ok: false });
+  if (!cfg.live) return res.json({ ok: false, why: "paper mode — go live first" });
+  const target = state.raffles.find((x) => x.id === String(req.body?.raffle ?? "") && x.kind === "paid" && x.status === "open");
+  if (!target) return res.json({ ok: false, why: "no such open paid raffle" });
+  const n = Math.max(1, Number(req.body?.tickets) || 1);
+  const fromPool = req.body?.fromPool !== false;
+  if (!cfg.tokenMint) return res.json({ ok: false, why: "no token mint set — there are no holders to raffle to" });
+  const rep = await holderReport();
+  if (!rep.holders.length) return res.json({ ok: false, why: rep.why ?? "no holders found" });
+  try {
+    const r = await createTicketGiveaway(target, n, rep.holders, { fromPool });
+    res.json({ ok: true, id: r.id, tickets: n, faceUsd: +(n * target.ticketUsd).toFixed(2), entrants: rep.holders.length });
+  } catch (e) {
+    res.json({ ok: false, why: String(e).slice(0, 170) });
   }
 });
 

@@ -922,6 +922,15 @@ ${cfg.live ? `<script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.ii
     </div>
 
     <div class="receipts">
+      <h3>GIVE AWAY TICKETS TO HOLDERS</h3>
+      <p style="font-size:13px;margin-bottom:10px">Free draw for seats in a live raffle. The seats are bought
+      at face value out of the holder pool right away and held until the draw, so the raffle stays fully
+      funded and nobody else can take them meanwhile.</p>
+      <div id="giveline"></div>
+      <p id="gmsg" class="dim" style="margin-top:10px;font-size:13px"></p>
+    </div>
+
+    <div class="receipts">
       <h3>FREE HOLDER RAFFLE</h3>
       <p style="font-size:13px;margin-bottom:10px">Give a vault card away to token holders, weighted by
       balance. Costs the profit pool nothing — use this for cards you supplied yourself.</p>
@@ -987,6 +996,23 @@ async function refresh(){
   document.querySelectorAll('.mc').forEach(c=>c.onchange=mprev);
   $('mshare').oninput=mprev;
   mprev();
+  $('giveline').innerHTML=(st.openPaidRaffles||[]).length
+    ? '<p class="dim" style="font-size:12px;margin-bottom:8px">holder pool: $'+st.holderPoolUsd+'</p>'+
+      (st.openPaidRaffles||[]).map(r=>'<div style="display:flex;gap:8px;align-items:center;padding:6px 0;flex-wrap:wrap">'+
+        '<span style="flex:1;font-size:13px">'+r.title.slice(0,40)+'</span>'+
+        '<span style="opacity:.6;font-size:12px">$'+r.ticketUsd+'/tix · '+r.left+' left</span>'+
+        '<input type="number" min="1" max="'+r.left+'" value="1" class="gn" data-r="'+r.id+'" style="width:60px;padding:6px 8px;border-radius:8px;border:2px solid var(--edge);background:#0d1016;color:var(--cream);font:700 13px var(--mono)">'+
+        '<button class="gv" data-r="'+r.id+'" data-p="'+r.ticketUsd+'" style="cursor:pointer;background:var(--signal);color:#04101f;border:0;border-radius:999px;padding:6px 12px;font:900 10px var(--lab);letter-spacing:.1em">GIVE AWAY</button></div>').join('')
+    : '<p class="dim" style="font-size:13px">no open paid raffles to give seats in</p>';
+  document.querySelectorAll('.gv').forEach(b=>{b.onclick=async()=>{
+    const n=Number(document.querySelector('.gn[data-r="'+b.dataset.r+'"]').value)||1;
+    const cost=(n*Number(b.dataset.p)).toFixed(2);
+    if(!confirm('Give away '+n+' ticket(s)? The pool pays $'+cost+' face value for them now.'))return;
+    b.textContent='…';
+    const j=await (await fetch('/api/admin/ticket-giveaway',{method:'POST',headers:hdr(),body:JSON.stringify({raffle:b.dataset.r,tickets:n})})).json();
+    $('gmsg').textContent=j.ok?('giveaway open — '+j.tickets+' ticket(s) worth $'+j.faceUsd+' to '+j.entrants+' holders'):j.why;
+    refresh();
+  };});
   document.querySelectorAll('.hr').forEach(b=>{b.onclick=async()=>{
     if(!confirm('Give this card away free to token holders?'))return;
     b.textContent='…';
